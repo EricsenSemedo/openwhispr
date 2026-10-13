@@ -1,8 +1,19 @@
 const { autoUpdater } = require("electron-updater");
 
+const fs = require("fs");
+const path = require("path");
+
+// A local fork build (resources/local-build.json, see local/README.md) is
+// rebuilt from source for each upstream release; the stock updater must not
+// replace it with the upstream app.
+const isLocalForkBuild =
+  Boolean(process.resourcesPath) &&
+  fs.existsSync(path.join(process.resourcesPath, "local-build.json"));
+
 // electron-updater can only replace an AppImage on Linux; deb, rpm and tar.gz
 // installs are updated by the package manager instead.
-const isUpdaterSupported = process.platform !== "linux" || Boolean(process.env.APPIMAGE);
+const isUpdaterSupported =
+  !isLocalForkBuild && (process.platform !== "linux" || Boolean(process.env.APPIMAGE));
 
 class UpdateManager {
   constructor() {
