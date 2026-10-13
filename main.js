@@ -367,6 +367,7 @@ let meetingAecManager = null;
 let semanticSearch = null;
 let ipcHandlers = null;
 let cliBridge = null;
+let localAsrRuntime = null;
 let globeKeyAlertShown = false;
 let macAccessibilityFeaturesReady = false;
 let startMacAccessibilityFeatures = null;
@@ -1160,6 +1161,14 @@ async function startApp() {
   // failure before the whisper pre-warm below resolves its GPU backend.
   resetWhisperGpuFailureOnUpgrade(environmentManager);
   registerSidecars();
+  if (process.platform === "win32") {
+    const { LocalAsrRuntime } = require("./src/helpers/localAsrRuntime");
+    localAsrRuntime = new LocalAsrRuntime({
+      profile: app.getPath("userData"), logger: debugLogger,
+    });
+    sidecarRegistry.register("local-asr-runtime", () => localAsrRuntime.stop());
+    localAsrRuntime.start();
+  }
   startAuthBridgeServer();
 
   cliBridge = new CliBridge(ipcHandlers);
@@ -2099,6 +2108,7 @@ if (gotSingleInstanceLock) {
 }
 
 function performSyncTeardown() {
+  if (localAsrRuntime) localAsrRuntime.stop().catch(() => {});
   if (wakeRewarmTimer) {
     clearTimeout(wakeRewarmTimer);
     wakeRewarmTimer = null;
