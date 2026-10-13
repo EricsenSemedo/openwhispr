@@ -1,6 +1,6 @@
 # Local fork (JamPC)
 
-This fork is upstream OpenWhispr plus a small stack of local commits on the
+This fork is upstream OpenWhispr plus a small set of local commits on the
 `local` branch. The stack runs on Ericsen's PC with a local speech and
 cleanup service (`%LOCALAPPDATA%\OpenWhisprLocal`, not in this repo).
 
@@ -31,15 +31,22 @@ Run on Windows (PowerShell paths shown; Python 3.12, Node 22+, Git).
 4. Prove the pipeline still reproduces upstream:
    `python -I local/build.py --official <downloads>\official --ref v<version> --verify-upstream`
    Every entry must be identical. If not, fix the build first.
-5. `git switch local && git rebase --onto v<version> <old tag> local`.
-   Resolve conflicts, keeping each commit's intent.
-6. `node --import tsx --test` on the touched tests (see each commit), then
-   `cd src && npx tsc --noEmit`.
-7. Build: `python -I local/build.py --official <downloads>\official --out <OpenWhisprLocal>\client\openwhispr-v<version>-local`
-8. Install with `%LOCALAPPDATA%\OpenWhisprLocal\SWITCH-CLIENT.ps1` (keeps the
-   old client for rollback), then dictate a test sentence.
-9. Push `local` (force-with-lease after a rebase) and open a PR on the fork
-   for review.
+5. `git switch -c update/v<version> local && git merge v<version>`.
+   Resolve conflicts, keeping each local commit's intent. Merging (not
+   rebasing) keeps `local` free of force-pushes, so each update is a normal PR.
+6. Run the whole suite on the merge and on the upstream tag
+   (`node --import tsx --test "test/**/*.test.js"`); the merge may only fail
+   tests that also fail upstream on Windows. Then `cd src && npx tsc --noEmit`.
+7. Build: `python -I local/build.py --official <downloads>\official --out <OpenWhisprLocal>\client\openwhispr-v<version>-local --ref update/v<version>`
+8. Push `update/v<version>` and open a PR into `local` on the fork. Stop
+   there: the owner merges.
+9. After the merge, install with
+   `%LOCALAPPDATA%\OpenWhisprLocal\SWITCH-CLIENT.ps1 -NewClient <client folder>`
+   (keeps the old client and a profile backup; `ROLLBACK-SWITCH-CLIENT.ps1`
+   undoes it), then dictate a test sentence.
+
+When upstream ships a feature that replaces a local one, `git revert` the
+local commit in its own PR.
 
 ## Build notes
 
