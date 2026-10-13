@@ -92,28 +92,110 @@ export function findSnippetTriggerRanges(
   snippets?: Snippet[] | null
 ): SnippetTriggerRange[] {
   if (!text) return [];
+  return guardedMatches(text, snippets).map(({ start, end }) => ({ start, end }));
+}
+
+// Local guard: text that is already literal data is never expanded. That is
+// quoted text, code, URLs, emails, paths, and lines that talk about words or
+// code ("the trigger my signature expands").
+function protectedRanges(text: string): Array<[number, number]> {
+  const ranges: Array<[number, number]> = [];
+  const quotes =
+    /```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)|"[^"\n]*"|“[^”\n]*”|`[^`\n]*`|(?<!\w)'[^'\n]*'(?!\w)|‘[^’\n]*’/gu;
+  for (const m of text.matchAll(quotes)) ranges.push([m.index, m.index + m[0].length]);
+  const literals =
+    /(?:https?:\/\/|www\.)[^\s<>"'`]+|[\p{L}\p{N}._%+\-]+@[\p{L}\p{N}.\-]+\.[\p{L}]{2,}|(?:[A-Za-z]:\\|\.{0,2}\/)[^\s<>"'`]+/gu;
+  for (const m of text.matchAll(literals)) ranges.push([m.index, m.index + m[0].length]);
+  let offset = 0;
+  for (const line of text.split("\n")) {
+    if (
+      /\b(?:literal|literally|word|words|phrase|trigger|snippet|keyword|quote|quoted|spell|spelled|named|called|variable|string|code|print)\b/i.test(
+        line
+      ) ||
+      /(?:\b(?:const|let|var|import)\s|[\p{L}_][\p{L}\p{N}_]*\s*(?:=>|==|=(?!=))|[{}]|^\s*return\b.*;)/u.test(line)
+    ) {
+      ranges.push([offset, offset + line.length]);
+    }
+    offset += line.length + 1;
+  }
+  return ranges;
+}
+
+function guardedMatches(
+  text: string,
+  snippets?: Snippet[] | null
+): Array<SnippetTriggerRange & { replacement: string }> {
   const matcher = getMatcher(snippets);
   if (!matcher) return [];
-  return [...text.matchAll(matcher.regex)]
-    .filter((match) => resolveReplacement(match[0], matcher.replacements) !== undefined)
-    .map((match) => ({
-      start: match.index,
-      end: match.index + match[0].length,
-    }));
+  const spans = protectedRanges(text);
+  const matches: Array<SnippetTriggerRange & { replacement: string }> = [];
+  for (const match of text.matchAll(matcher.regex)) {
+    const replacement = resolveReplacement(match[0], matcher.replacements);
+    const start = match.index;
+    const end = start + match[0].length;
+    if (replacement === undefined || spans.some(([a, b]) => start < b && end > a)) continue;
+    // Apostrophes allow possessives, but not pieces of n't contractions.
+    if (/^[’']t\b/i.test(text.slice(end)) || /n[’']$/i.test(text.slice(0, start))) continue;
+    matches.push({ start, end, replacement });
+  }
+  return matches;
+}
+
+/** Trigger identity: case, punctuation, symbols and spaces are ignored. */
+export function normalizeWhole(value: string): string {
+  return value.normalize("NFC").toLowerCase().replace(/[\p{P}\p{S}\s]/gu, "");
 }
 
 /**
- * Replace every spoken trigger with its saved text in a single pass.
+ * Replace every spoken trigger with its saved text in a single pass. Saved
+ * text is inserted exactly and never expanded again.
  */
 export function expandSnippets(text: string, snippets?: Snippet[] | null): string {
   if (!text) return text;
-  const matcher = getMatcher(snippets);
-  if (!matcher) return text;
-  const { regex, replacements } = matcher;
+  if (!getMatcher(snippets)) return text;
   // NFC so a decomposed "I" + U+0307 in the transcript recombines into İ.
-  return text
-    .normalize("NFC")
-    .replace(regex, (match) => resolveReplacement(match, replacements) ?? match);
+  const normalized = text.normalize("NFC");
+  // An utterance that is only a trigger ("My portfolio.") becomes exactly the
+  // saved text, without the punctuation dictation added around it.
+  const whole = normalizeWhole(normalized);
+  const exact = whole && snippets!.find((s) => normalizeWhole(s?.trigger ?? "") === whole);
+  if (exact && !protectedRanges(normalized).some(([a, b]) => a < normalized.length && b > 0)) {
+    return exact.replacement;
+  }
+  let result = "";
+  let cursor = 0;
+  for (const m of guardedMatches(normalized, snippets)) {
+    result += normalized.slice(cursor, m.start) + m.replacement;
+    cursor = m.end;
+  }
+  return result + normalized.slice(cursor);
+}
+
+/** An error message for the snippet editor, or "" when the snippet is valid. */
+export function validateSnippet(
+  trigger: string,
+  replacement: string,
+  snippets: Snippet[],
+  previousTrigger: string | null = null
+): string {
+  if (!trigger.trim() || !normalizeWhole(trigger)) {
+    return "Enter a spoken trigger with letters or numbers.";
+  }
+  if (trigger.trim().length > MAX_SNIPPET_TRIGGER_LENGTH) {
+    return "Use a trigger of 100 characters or fewer.";
+  }
+  if (!replacement.trim()) return "Enter the text to insert.";
+  const fold = (value: string) => value.normalize("NFC").toLowerCase();
+  const conflict = (Array.isArray(snippets) ? snippets : []).find(
+    (s) =>
+      typeof s?.trigger === "string" &&
+      s.trigger.trim() &&
+      fold(s.trigger.trim()) !== fold((previousTrigger || "").trim()) &&
+      normalizeWhole(s.trigger) === normalizeWhole(trigger)
+  );
+  return conflict
+    ? `This conflicts with “${conflict.trigger.trim()}”. Choose a different phrase.`
+    : "";
 }
 
 /**

@@ -2795,8 +2795,8 @@ class DatabaseManager {
       for (const raw of Array.isArray(snippets) ? snippets : []) {
         if (!raw || typeof raw !== "object") continue;
         const trigger = typeof raw.trigger === "string" ? raw.trigger.trim() : "";
-        const replacement = typeof raw.replacement === "string" ? raw.replacement.trim() : "";
-        if (!trigger || !replacement) continue;
+        const replacement = typeof raw.replacement === "string" ? raw.replacement : "";
+        if (!trigger || !replacement.trim()) continue;
         if (trigger.length > MAX_SNIPPET_TRIGGER_LENGTH) continue;
         const lower = trigger.toLowerCase();
         if (!incomingByLower.has(lower)) incomingByLower.set(lower, { trigger, replacement });

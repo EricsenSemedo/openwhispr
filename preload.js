@@ -198,6 +198,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.on("dictionary-updated", listener);
     return () => ipcRenderer.removeListener("dictionary-updated", listener);
   },
+  localSnippetMutation: (input) => ipcRenderer.invoke("local-snippet-mutation", input),
   getSnippets: () => ipcRenderer.invoke("db-get-snippets"),
   setSnippets: (snippets) => ipcRenderer.invoke("db-set-snippets", snippets),
   onSnippetsUpdated: (callback) => {

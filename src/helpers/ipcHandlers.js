@@ -2127,6 +2127,13 @@ class IPCHandlers {
       return { success: true };
     });
 
+    ipcMain.handle("local-snippet-mutation", (_event, input) => {
+      const { mutateSnippets } = require("./snippetMutation");
+      const snippets = mutateSnippets(this.databaseManager, input);
+      broadcastToWindows("snippets-updated", snippets);
+      return snippets;
+    });
+
     ipcMain.handle("db-get-snippets", async () => {
       return this.databaseManager.getSnippets();
     });
