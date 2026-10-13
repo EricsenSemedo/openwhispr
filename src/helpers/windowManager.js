@@ -1501,7 +1501,7 @@ class WindowManager {
       // expose the dictation pill, hotkeys, or popup surfaces in between.
       this.setOnboardingActive(true);
       this.endOnboardingDemo();
-      this.controlPanelWindow.setTitle(i18nMain.t("window.controlPanelTitle"));
+      this.controlPanelWindow.setTitle("Local Dictation");
     });
 
     this.controlPanelWindow.webContents.on(
@@ -2592,7 +2592,7 @@ class WindowManager {
 
     if (this.controlPanelWindow && !this.controlPanelWindow.isDestroyed()) {
       MenuManager.setupControlPanelMenu(this.controlPanelWindow, () => this.openSettings());
-      this.controlPanelWindow.setTitle(i18nMain.t("window.controlPanelTitle"));
+      this.controlPanelWindow.setTitle("Local Dictation");
     }
 
     if (this.mainWindow && !this.mainWindow.isDestroyed()) {

@@ -12,6 +12,7 @@ import { RequiredModelsBanner } from "./RequiredModelsBanner";
 import { ConfirmDialog, AlertDialog } from "./ui/dialog";
 import { useDialogs } from "../hooks/useDialogs";
 import { useHotkey } from "../hooks/useHotkey";
+import { mountLocalDashboard } from "./localDashboard/localDashboard";
 import { useToast } from "./ui/useToast";
 import { useUpdater } from "../hooks/useUpdater";
 import { useSettings } from "../hooks/useSettings";
@@ -118,6 +119,8 @@ interface ControlPanelProps {
 }
 
 export default function ControlPanel({ initialSettingsSection }: ControlPanelProps = {}) {
+  // Local Dictation home screen; "Settings" inside it shows the stock panel.
+  useEffect(() => mountLocalDashboard(useSettingsStore), []);
   const { t } = useTranslation();
   useEffect(subscribeMeetingNotificationFolders, []);
   const history = useTranscriptions();
