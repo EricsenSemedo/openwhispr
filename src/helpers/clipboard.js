@@ -971,7 +971,7 @@ class ClipboardManager {
           clipboard.writeText(text);
         }
         this._writePrimarySelection(text);
-      } else if (platform === "win32") {
+      } else if (platform === "win32" && flowAdapter.isEnabled()) {
         // OpenWhisprLocal: keep dictations out of Win+V history and cloud
         // clipboard; Electron's own write is the fallback.
         const wrotePrivate = await flowAdapter.writePrivateClipboard(text);

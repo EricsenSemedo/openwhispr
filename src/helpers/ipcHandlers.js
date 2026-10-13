@@ -1346,16 +1346,22 @@ class IPCHandlers {
     this._autoLearnLatestData = null;
 
     try {
-      const { extractCorrectionPairs } = require("../utils/correctionLearner");
+      const { extractCorrections, extractCorrectionPairs } = require("../utils/correctionLearner");
       const currentDict = this._getDictionarySafe();
-      // OpenWhisprLocal: candidates are reviewed by the local flow adapter
-      // (at most 4 per edit, no digits, common words only with model
-      // approval) and stored there as misheard -> correct pairs. Nothing is
-      // learned when the adapter is unavailable.
-      const pairs = extractCorrectionPairs(originalText, newFieldValue, currentDict);
-      const acceptedPairs = await flowAdapter.reviewCorrections(pairs, newFieldValue);
-      if (!this._autoLearnEnabled) return;
-      const corrections = [...new Set(acceptedPairs.map((pair) => pair.to))];
+      let corrections;
+      let acceptedPairs = [];
+      if (flowAdapter.isEnabled()) {
+        // OpenWhisprLocal: candidates are reviewed by the local flow adapter
+        // (at most 4 per edit, no digits, common words only with model
+        // approval) and stored there as misheard -> correct pairs. Nothing is
+        // learned when the adapter is unavailable.
+        const pairs = extractCorrectionPairs(originalText, newFieldValue, currentDict);
+        acceptedPairs = await flowAdapter.reviewCorrections(pairs, newFieldValue);
+        if (!this._autoLearnEnabled) return;
+        corrections = [...new Set(acceptedPairs.map((pair) => pair.to))];
+      } else {
+        corrections = extractCorrections(originalText, newFieldValue, currentDict);
+      }
       debugLogger.debug("[AutoLearn] Corrections result", {
         corrections,
         dictSize: currentDict.length,
@@ -2214,7 +2220,7 @@ class IPCHandlers {
           return { success: false };
         }
         broadcastToWindows("dictionary-updated", this.databaseManager.getDictionary());
-        flowAdapter.forgetLearned(validWords);
+        if (flowAdapter.isEnabled()) flowAdapter.forgetLearned(validWords);
         debugLogger.debug("[AutoLearn] Undo: removed words", { words: validWords });
         return { success: true };
       } catch (err) {
@@ -3291,7 +3297,9 @@ class IPCHandlers {
       // text already around the cursor (read by the adapter when the audio
       // arrived). Falls back to the text unchanged.
       const flowText =
-        process.platform === "win32" ? await flowAdapter.adjustForCursor(text, targetWindow) : text;
+        process.platform === "win32" && flowAdapter.isEnabled()
+          ? await flowAdapter.adjustForCursor(text, targetWindow)
+          : text;
 
       // Smart spacing (#856): append a trailing space so the next paste's leading
       // space self-corrects the gap. Reading the char before the cursor to space

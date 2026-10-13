@@ -3,9 +3,30 @@
 // helpers: casing/spacing that fits the text around the cursor, a clipboard
 // write that stays out of Win+V history, and reviewed auto-learn. Every call
 // is best-effort with a short deadline; null means "use stock behaviour".
+const fs = require("fs");
 const http = require("http");
+const path = require("path");
 
 const FLOW_ADAPTER_URL = process.env.OPENWHISPR_FLOW_URL || "http://127.0.0.1:18765";
+
+let enabled = null;
+
+// The helpers run only on an OpenWhisprLocal setup: its profile holds
+// local-dictation-options.json (or OPENWHISPR_FLOW_URL is set). Everyone
+// else keeps stock behaviour with no extra requests.
+function isEnabled() {
+  if (enabled === null) {
+    try {
+      const { app } = require("electron");
+      enabled =
+        Boolean(process.env.OPENWHISPR_FLOW_URL) ||
+        fs.existsSync(path.join(app.getPath("userData"), "local-dictation-options.json"));
+    } catch {
+      enabled = Boolean(process.env.OPENWHISPR_FLOW_URL);
+    }
+  }
+  return enabled;
+}
 
 function flowRequest(method, pathname, body, timeoutMs) {
   return new Promise((resolve) => {
@@ -112,6 +133,7 @@ function forgetLearned(words) {
 }
 
 module.exports = {
+  isEnabled,
   forgetLearned,
   adjustForCursor,
   writePrivateClipboard,
