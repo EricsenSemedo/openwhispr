@@ -5,6 +5,7 @@ const path = require("path");
 const fs = require("fs");
 const os = require("os");
 const { isRestorablePasteTarget } = require("./windowsPasteTarget");
+const flowAdapter = require("./flowAdapter");
 const crypto = require("crypto");
 const debugLogger = require("./debugLogger");
 const { ANALYTICS_HISTORY_BACKFILL_VERSION } = require("./analytics");
@@ -1332,7 +1333,7 @@ class IPCHandlers {
     this.textEditMonitor.on("text-edited", this._textEditHandler);
   }
 
-  _processCorrections() {
+  async _processCorrections() {
     this._autoLearnDebounceTimer = null;
     if (!this._autoLearnLatestData) return;
     if (!this._autoLearnEnabled) {
@@ -1345,9 +1346,16 @@ class IPCHandlers {
     this._autoLearnLatestData = null;
 
     try {
-      const { extractCorrections } = require("../utils/correctionLearner");
+      const { extractCorrectionPairs } = require("../utils/correctionLearner");
       const currentDict = this._getDictionarySafe();
-      const corrections = extractCorrections(originalText, newFieldValue, currentDict);
+      // OpenWhisprLocal: candidates are reviewed by the local flow adapter
+      // (at most 4 per edit, no digits, common words only with model
+      // approval) and stored there as misheard -> correct pairs. Nothing is
+      // learned when the adapter is unavailable.
+      const pairs = extractCorrectionPairs(originalText, newFieldValue, currentDict);
+      const acceptedPairs = await flowAdapter.reviewCorrections(pairs, newFieldValue);
+      if (!this._autoLearnEnabled) return;
+      const corrections = [...new Set(acceptedPairs.map((pair) => pair.to))];
       debugLogger.debug("[AutoLearn] Corrections result", {
         corrections,
         dictSize: currentDict.length,
@@ -1371,6 +1379,7 @@ class IPCHandlers {
         // Show the overlay so the toast is visible (it may have been hidden after dictation)
         this.windowManager.showDictationPanel();
         broadcastToWindows("corrections-learned", corrections);
+        flowAdapter.rememberPairs(acceptedPairs);
         debugLogger.debug("[AutoLearn] Saved corrections", { corrections });
       }
     } catch (error) {
@@ -2205,6 +2214,7 @@ class IPCHandlers {
           return { success: false };
         }
         broadcastToWindows("dictionary-updated", this.databaseManager.getDictionary());
+        flowAdapter.forgetLearned(validWords);
         debugLogger.debug("[AutoLearn] Undo: removed words", { words: validWords });
         return { success: true };
       } catch (err) {
@@ -3257,12 +3267,6 @@ class IPCHandlers {
         }
       }
 
-      // Smart spacing (#856): append a trailing space so the next paste's leading
-      // space self-corrects the gap. Reading the char before the cursor to space
-      // the front instead would take a macOS Accessibility read costing hundreds
-      // of ms — too slow for the paste hot path.
-      const textToPaste = applySmartSpacing(text);
-
       // Windows: restore the foreground window captured at record start so the
       // paste lands in the field the user was dictating into, not wherever focus
       // drifted during transcription (#859). macOS handles this via
@@ -3282,6 +3286,18 @@ class IPCHandlers {
         })
           ? winTarget.id
           : null;
+
+      // OpenWhisprLocal flow adapter: fit casing and the leading space to the
+      // text already around the cursor (read by the adapter when the audio
+      // arrived). Falls back to the text unchanged.
+      const flowText =
+        process.platform === "win32" ? await flowAdapter.adjustForCursor(text, targetWindow) : text;
+
+      // Smart spacing (#856): append a trailing space so the next paste's leading
+      // space self-corrects the gap. Reading the char before the cursor to space
+      // the front instead would take a macOS Accessibility read costing hundreds
+      // of ms — too slow for the paste hot path.
+      const textToPaste = applySmartSpacing(flowText);
 
       let pasteResult;
       try {
@@ -3313,9 +3329,9 @@ class IPCHandlers {
         setTimeout(() => {
           try {
             debugLogger.debug("[AutoLearn] Starting monitoring", {
-              textPreview: text.substring(0, 80),
+              textPreview: flowText.substring(0, 80),
             });
-            this.textEditMonitor.startMonitoring(text, 30000, { targetPid });
+            this.textEditMonitor.startMonitoring(flowText.trimStart(), 30000, { targetPid });
           } catch (err) {
             debugLogger.debug("[AutoLearn] Failed to start monitoring", { error: err.message });
           }

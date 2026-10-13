@@ -171,18 +171,8 @@ function extractCorrections(originalText, fieldValue, existingDictionary) {
 
   for (const [origWord, correctedWord] of subs) {
     const normalizedCorrected = correctedWord.toLowerCase();
-
-    if (dictSet.has(normalizedCorrected)) continue;
     if (seenCorrections.has(normalizedCorrected)) continue;
-    if (origWord.toLowerCase() === normalizedCorrected) continue;
-    if (correctedWord.length < 3) continue;
-    if (COMMON_WORDS.has(normalizedCorrected)) continue;
-
-    // 0.65 threshold allows phonetic corrections like "Shunade" → "Sinead" (dist 4/7 = 0.57)
-    // while filtering out unrelated word replacements.
-    const dist = editDistance(origWord.toLowerCase(), correctedWord.toLowerCase());
-    const maxLen = Math.max(origWord.length, correctedWord.length);
-    if (dist / maxLen > 0.65) continue;
+    if (!isLikelyCorrection(origWord, correctedWord, dictSet)) continue;
 
     results.push(correctedWord);
     seenCorrections.add(normalizedCorrected);
@@ -191,4 +181,48 @@ function extractCorrections(originalText, fieldValue, existingDictionary) {
   return results;
 }
 
-module.exports = { extractCorrections };
+/** One substitution that looks like a fixed mishearing rather than an edit. */
+function isLikelyCorrection(origWord, correctedWord, dictSet) {
+  const normalizedCorrected = correctedWord.toLowerCase();
+
+  if (dictSet.has(normalizedCorrected)) return false;
+  if (origWord.toLowerCase() === normalizedCorrected) return false;
+  if (correctedWord.length < 3) return false;
+  if (COMMON_WORDS.has(normalizedCorrected)) return false;
+
+  // 0.65 threshold allows phonetic corrections like "Shunade" → "Sinead" (dist 4/7 = 0.57)
+  // while filtering out unrelated word replacements.
+  const dist = editDistance(origWord.toLowerCase(), correctedWord.toLowerCase());
+  const maxLen = Math.max(origWord.length, correctedWord.length);
+  return dist / maxLen <= 0.65;
+}
+
+/**
+ * Like extractCorrections, but returns {from, to} pairs (what was misheard and
+ * what the user typed) for review by the local flow adapter, which caps,
+ * filters and stores them. Common-word, length and similarity checks above
+ * still apply here as a cheap first pass.
+ */
+function extractCorrectionPairs(originalText, fieldValue, existingDictionary) {
+  if (!originalText || !fieldValue || originalText === fieldValue) return [];
+  const editedRegion = findEditedRegion(originalText, fieldValue);
+  if (editedRegion === originalText) return [];
+  const origWords = tokenize(originalText);
+  const editedWords = tokenize(editedRegion);
+  if (origWords.length === 0 || editedWords.length === 0) return [];
+  const subs = findSubstitutions(origWords, editedWords);
+  if (subs.length > origWords.length * 0.5) return [];
+  const safeDict = Array.isArray(existingDictionary) ? existingDictionary : [];
+  const dictSet = new Set(safeDict.map((w) => w.toLowerCase()));
+  const seen = new Set();
+  const pairs = [];
+  for (const [from, to] of subs) {
+    const key = to.toLowerCase();
+    if (seen.has(key) || !isLikelyCorrection(from, to, dictSet)) continue;
+    seen.add(key);
+    pairs.push({ from, to });
+  }
+  return pairs;
+}
+
+module.exports = { extractCorrections, extractCorrectionPairs };

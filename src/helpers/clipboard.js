@@ -7,6 +7,7 @@ const os = require("os");
 const debugLogger = require("./debugLogger");
 const { getLinuxSessionInfo } = require("./linuxSession");
 const { getCosmicActiveAppId } = require("./cosmicToplevel");
+const flowAdapter = require("./flowAdapter");
 
 const CACHE_TTL_MS = 30000;
 
@@ -970,6 +971,13 @@ class ClipboardManager {
           clipboard.writeText(text);
         }
         this._writePrimarySelection(text);
+      } else if (platform === "win32") {
+        // OpenWhisprLocal: keep dictations out of Win+V history and cloud
+        // clipboard; Electron's own write is the fallback.
+        const wrotePrivate = await flowAdapter.writePrivateClipboard(text);
+        if (!wrotePrivate || clipboard.readText() !== text) {
+          clipboard.writeText(text);
+        }
       } else {
         clipboard.writeText(text);
       }
