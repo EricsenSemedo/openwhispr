@@ -917,8 +917,42 @@ class WindowManager {
     return required;
   }
 
+  _getDualShortcutGesture() {
+    if (process.platform !== "win32") return null;
+    if (this._dualShortcutChecked) return this._dualShortcutGesture || null;
+    this._dualShortcutChecked = true;
+    let options;
+    try {
+      const optionsPath = require("path").join(app.getPath("userData"), "local-dictation-options.json");
+      options = JSON.parse(require("fs").readFileSync(optionsPath, "utf8").replace(/^\uFEFF/, ""));
+    } catch { return null; }
+    if (options.dualShortcut !== true) return null;
+    const { DualShortcutGesture } = require("./dualShortcutGesture");
+    this._dualShortcutGesture = new DualShortcutGesture({
+      prepare: () => {
+        const targetPidPromise = this.textEditMonitor?.captureTargetPid?.();
+        this.showDictationPanel({ reposition: true, targetPidPromise });
+        this.sendPrepareDictation();
+      },
+      start: () => this.sendStartDictation(),
+      stop: () => this.sendStopDictation(),
+      cancel: () => this.sendCancelDictation(),
+      cancelPreparation: () => this.sendCancelDictationPreparation(),
+      hide: () => this.hideDictationPanel(),
+    }, {
+      holdMs: Math.max(100, Math.min(400, Number(options.holdMs) || 150)),
+      doubleTapMs: Math.max(200, Math.min(600, Number(options.doubleTapMs) || 350)),
+    });
+    return this._dualShortcutGesture;
+  }
+
   startWindowsPushToTalk(key) {
     if (!this._isOnboardingInputAllowed("dictation")) return;
+    const dualShortcut = this._getDualShortcutGesture();
+    if (dualShortcut) {
+      if (!this.isDictationProcessing()) dualShortcut.press(key);
+      return;
+    }
     if (this.winPushState?.active || this.isDictationProcessing()) {
       return;
     }
@@ -961,6 +995,11 @@ class WindowManager {
   // go; every other reason ends a push whose trigger keys are still physically
   // down, which the renderer must know before it pastes.
   handleWindowsPushKeyUp(key, { reason = "release" } = {}) {
+    if (this._dualShortcutGesture) {
+      if (reason === "release") this._dualShortcutGesture.release(key);
+      else this._dualShortcutGesture.cancel();
+      return;
+    }
     if (!this.winPushState?.active) {
       return;
     }
@@ -986,6 +1025,8 @@ class WindowManager {
   }
 
   resetWindowsPushState() {
+    // The old listener may be removed before releasing its held chord.
+    this._dualShortcutGesture?.cancel({ preservePhysicalDown: false });
     if (!this.winPushState?.active) {
       return;
     }
@@ -1100,6 +1141,7 @@ class WindowManager {
   setDictationLifecycleState(state, inputKind = DICTATION_INPUT_KIND.DICTATION) {
     const nextState = normalizeDictationLifecycle(state);
     const nextInputKind = normalizeDictationInputKind(inputKind);
+    this._dualShortcutGesture?.lifecycle(nextState);
     if (nextState === this._dictationLifecycleState && nextInputKind === this._dictationInputKind) {
       return;
     }
@@ -1226,6 +1268,7 @@ class WindowManager {
   }
 
   sendCancelDictation() {
+    this._dualShortcutGesture?.cancel({ notify: false });
     if (this.hotkeyManager.isInListeningMode()) {
       return;
     }
@@ -1241,6 +1284,7 @@ class WindowManager {
   // main window's renderer owns the recording state, so it decides what
   // "cancel" means at arrival time.
   sendCancelActiveDictation() {
+    this._dualShortcutGesture?.cancel({ notify: false });
     if (this.mainWindow && !this.mainWindow.isDestroyed()) {
       this.mainWindow.webContents.send("cancel-dictation");
     }
