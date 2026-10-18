@@ -266,25 +266,51 @@ def warm(cfg, category: str = 'other') -> None:
         pass
 
 
+# Bug review 2026-10-17: the length-scaled drift_reason let the light cleanup
+# drop whole clauses from long dictations outside agent apps (21 of 208 replays
+# lost or changed 5+ words). strict_reason now guards every app. When it
+# rejects a light cleanup, the minimal agent-style fix is tried once (its
+# prompt is the second cached one) before falling back to the rules-only text.
+RETRY_MIN_S = 0.8  # skip the retry when less than this is left of the time budget
+
+
+def _reason(text: str, out: str, allowed: set[str], hints) -> str | None:
+    return (drift_reason(text, out, allowed) or vocab_swap(text, out, allowed, hints)
+            or strict_reason(text, out, allowed))
+
+
 def clean_with_model(text: str, *, ctx, style, category, vocabulary, hints, cfg) -> tuple[str | None, dict]:
     """Returns (cleaned text or None, info)."""
     t0 = time.monotonic()
+    deadline = t0 + cfg.get('timeoutMs', 2500) / 1000
     user = build_user_message(text, ctx, style, category, vocabulary, hints)
     max_tokens = int(len(text) / 2.5) + 40
-    info = {'engine': 'llm'}
-    try:
-        out = call_model(cfg['baseUrl'], cfg.get('model', 'cleanup'), prompt_for(category), user, max_tokens,
-                         cfg.get('timeoutMs', 2500) / 1000, cfg.get('apiKey'))
-    except Exception as exc:
-        info.update(engine='rules', fallback=type(exc).__name__, ms=round((time.monotonic() - t0) * 1000))
-        return None, info
-    out = strip_wrapping(out)
     allowed = set(vocabulary) | {t for _, t in hints}
-    reason = drift_reason(text, out, allowed) or vocab_swap(text, out, allowed, hints)
-    if not reason and category == 'agent':
-        reason = strict_reason(text, out, allowed)
+    info = {'engine': 'llm'}
+    prompts = [prompt_for(category)] + ([AGENT_PROMPT] if category != 'agent' else [])
+    for attempt, system in enumerate(prompts):
+        left = deadline - time.monotonic()
+        if attempt and left < RETRY_MIN_S:
+            break
+        try:
+            out = call_model(cfg['baseUrl'], cfg.get('model', 'cleanup'), system, user, max_tokens,
+                             left, cfg.get('apiKey'))
+        except Exception as exc:
+            if not attempt:
+                info.update(engine='rules', fallback=type(exc).__name__,
+                            ms=round((time.monotonic() - t0) * 1000))
+                return None, info
+            info['retry'] = type(exc).__name__
+            break
+        out = strip_wrapping(out)
+        reason = _reason(text, out, allowed, hints)
+        if attempt:
+            info['retry'] = 'guard:' + reason if reason else 'ok'
+        if not reason:
+            info['ms'] = round((time.monotonic() - t0) * 1000)
+            return out, info
+        if not attempt:
+            first = reason
     info['ms'] = round((time.monotonic() - t0) * 1000)
-    if reason:
-        info.update(engine='rules', fallback='guard:' + reason)
-        return None, info
-    return out, info
+    info.update(engine='rules', fallback='guard:' + first)
+    return None, info

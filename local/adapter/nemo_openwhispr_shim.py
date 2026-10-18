@@ -25,6 +25,7 @@ import os
 import re
 import subprocess
 import tempfile
+import time
 import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -122,6 +123,58 @@ def transcribe(audio_path: str, model: str, language: str | None, prompt: str | 
     return result["text"]
 
 
+# Bug review 2026-10-17: Parakeet returns empty text for some quiet but clear
+# clips (a 6 s sentence peaking near -15 dBFS came back empty 3 times out of
+# 3 and was transcribed correctly at +6 dB). An empty result for a clip that
+# has sound is retried once, 6 dB louder. Digital silence (a gated or muted
+# mic) and very quiet clips are not retried, so noise never turns into words.
+RETRY_GAIN_DB = 6.0
+RETRY_MIN_PEAK = 328         # about -40 dBFS on 16-bit samples
+RETRY_MAX_SECONDS = 60       # bounds the extra work on a long clip
+
+
+def louder_copy(wav_path: str, gain_db: float = RETRY_GAIN_DB) -> str | None:
+    """A temp WAV gain_db louder (clipped), or None when the clip should not
+    be retried: not 16-bit mono PCM, longer than RETRY_MAX_SECONDS, or a peak
+    below RETRY_MIN_PEAK. The caller removes the returned file."""
+    import array
+    import wave
+    with wave.open(wav_path, "rb") as src:
+        params = src.getparams()
+        if params.sampwidth != 2 or params.nchannels != 1 or params.comptype != "NONE":
+            return None
+        if params.nframes > RETRY_MAX_SECONDS * params.framerate:
+            return None
+        samples = array.array("h", src.readframes(params.nframes))
+    if not samples or max(max(samples), -min(samples)) < RETRY_MIN_PEAK:
+        return None
+    gain = 10 ** (gain_db / 20)
+    louder = array.array("h", (max(-32768, min(32767, round(x * gain))) for x in samples))
+    fd, out_path = tempfile.mkstemp(suffix=".wav")
+    os.close(fd)
+    with wave.open(out_path, "wb") as dst:
+        dst.setparams(params)
+        dst.writeframes(louder.tobytes())
+    return out_path
+
+
+def transcribe_with_retry(wav_path: str, model: str, language: str | None,
+                          prompt: str | None) -> str:
+    text = transcribe(wav_path, model, language, prompt)
+    if (text or "").strip():
+        return text
+    louder = louder_copy(wav_path)
+    if louder is None:
+        return text
+    try:
+        retried = transcribe(louder, model, language, prompt)
+    finally:
+        os.remove(louder)
+    print(json.dumps({"t": time.strftime("%H:%M:%S"), "event": "asr-retry", "gain_db": RETRY_GAIN_DB,
+                      "recovered": bool((retried or "").strip())}), flush=True)
+    return retried if (retried or "").strip() else text
+
+
 class ShimHandler(BaseHTTPRequestHandler):
     """Handles the single POST endpoint OpenWhispr calls."""
 
@@ -195,7 +248,7 @@ class ShimHandler(BaseHTTPRequestHandler):
             with os.fdopen(fd, "wb") as f:
                 f.write(file_bytes)
             wav_path = convert_audio(in_path)
-            text = transcribe(wav_path, model, language, prompt)
+            text = transcribe_with_retry(wav_path, model, language, prompt)
             self._send_json(200, {"text": text or "", "object": "transcription"})
         except FileNotFoundError:
             self._send_json(500, {"error": "ffmpeg not found on PATH"})
