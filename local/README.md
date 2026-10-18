@@ -2,7 +2,9 @@
 
 This fork is upstream OpenWhispr plus a small set of local commits on the
 `local` branch. The stack runs on Ericsen's PC with a local speech and
-cleanup service (`%LOCALAPPDATA%\OpenWhisprLocal`, not in this repo).
+cleanup service (`%LOCALAPPDATA%\OpenWhisprLocal`). The Python adapter it
+talks to is kept in `local/adapter/` (see its README); models and runtimes
+are not in this repo.
 
 ## What the stack adds
 
