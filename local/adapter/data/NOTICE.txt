@@ -1,0 +1,4 @@
+common-en-30k.txt: the 30,000 most frequent English words from wordfreq 3.x
+(https://github.com/rspeer/wordfreq), whose word-frequency data is licensed
+CC BY-SA 4.0. Generated 2026-10-12 with top_n_list("en", 40000), letters and
+apostrophes only.
