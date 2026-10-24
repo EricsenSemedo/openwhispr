@@ -165,6 +165,16 @@ _NUMBER_WORDS = {'zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 
                  'nineteen', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety',
                  'hundred', 'thousand', 'million', 'billion', 'percent'}
 _SAFE_MID = {'a', 'an', 'the', 'to', 'of'}  # ASR often drops these; never allowed as the first word
+# Grammar words the light cleanup adds to repair speech ("the plugin
+# probably have" -> "has", "so is easier" -> "so it is easier", "pair it to"
+# -> "with"). Replay of 235 saved dictations (2026-10-24): rejecting
+# them sent 12-14 good cleanups back to rules-only text. Allowed inside the
+# text only, never as the first word, and at most the strict budget of them.
+# Discourse and hedge words (so, okay, well, and, just, please, maybe, then),
+# modals, negations and content words are never allowed.
+_GRAMMAR_MID = {'it', 'its', "it's", 'they', 'them', 'he', 'she', 'we', 'you', 'i', 'this', 'that', 'which',
+                'who', 'is', 'are', 'was', 'were', 'be', 'been', 'has', 'have', 'had', 'do', 'does', 'did',
+                'for', 'with', 'in', 'on', 'at', 'by', 'from', 'about', 'into', 'as'}
 
 
 def added_words(source: str, output: str, allowed: set[str] = frozenset()) -> list[str]:
@@ -184,6 +194,7 @@ def added_words(source: str, output: str, allowed: set[str] = frozenset()) -> li
     expanded = [x for w in b for x in (joined[w] if w in joined and w not in a else [w])]
     vocab = {w.lower() for v in allowed for w in _TOKEN.findall(v)}
     added = []
+    grammar = max(2, len(a) // 25)
     for op, i1, i2, j1, j2 in SequenceMatcher(None, a, expanded, autojunk=False).get_opcodes():
         if op in ('equal', 'delete'):
             continue
@@ -196,6 +207,9 @@ def added_words(source: str, output: str, allowed: set[str] = frozenset()) -> li
             if w.isdigit() and any(x in _NUMBER_WORDS or x.isdigit() for x in old):
                 continue
             if j > 0 and w in _SAFE_MID:
+                continue
+            if j > 0 and w in _GRAMMAR_MID and grammar > 0:
+                grammar -= 1
                 continue
             added.append(w)
     return added

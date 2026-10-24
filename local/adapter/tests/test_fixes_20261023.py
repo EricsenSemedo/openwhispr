@@ -83,6 +83,26 @@ class AddedWordGuardTests(unittest.TestCase):
                 self.assertEqual(flow_llm.added_words(s, o, VOCAB), [])
                 self.assertIsNone(flow_llm.drift_reason(s, o, VOCAB))
 
+    def test_grammar_repairs_inside_the_text_allowed(self):
+        for s, o in [
+            ('the new plugin probably have a bug in the loader', 'The new plugin probably has a bug in the loader.'),
+            ('move the save button so is easier to reach', 'Move the save button so it is easier to reach.'),
+            ('pair the speaker to the laptop before the party', 'Pair the speaker with the laptop before the party.'),
+            ('the blue lamp seems a bit dim at night', 'The blue lamp, which seems a bit dim at night.'),
+        ]:
+            with self.subTest(o=o):
+                self.assertEqual(flow_llm.added_words(s, o), [])
+                self.assertIsNone(guard(s, o))
+
+    def test_grammar_words_limited(self):
+        # Never as the first word, never more than the budget, never other words.
+        self.assertEqual(flow_llm.added_words('works on my machine now', 'It works on my machine now.'), ['it'])
+        self.assertEqual(flow_llm.added_words('send file client now', 'Send it for the file with it in the client now.'),
+                         ['with', 'it', 'in'])  # "it" and "for" use the budget of 2
+        for w in ('so', 'just', 'then', 'and', 'maybe', 'could', 'not', 'please', 'really'):
+            with self.subTest(w=w):
+                self.assertEqual(flow_llm.added_words('we ship the update today', f'We {w} ship the update today.'), [w])
+
     def test_article_never_allowed_first(self):
         self.assertEqual(flow_llm.added_words('build failed again', 'The build failed again.'), ['the'])
         self.assertEqual(flow_llm.added_words('fix login page', 'Fix the login page.'), [])
