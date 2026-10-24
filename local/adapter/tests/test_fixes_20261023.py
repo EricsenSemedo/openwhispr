@@ -102,6 +102,85 @@ class AddedWordGuardTests(unittest.TestCase):
                 self.assertEqual(info['fallback'], 'guard:added')
 
 
+def guard(source, output, allowed=VOCAB):
+    """The full check every app gets since PR #1."""
+    return flow_llm._reason(source, output, set(allowed), [])
+
+
+class IntendedDropTests(unittest.TestCase):
+    """2026-10-24: PR #1's strict check exempts clearly intended drops."""
+
+    def test_self_corrections_and_fillers_pass(self):
+        for s, o in [
+            ("Let's meet at four, no wait, at five in the lobby.", "Let's meet at five in the lobby."),
+            ('Send it to Sarah, I mean to Jessica, by the end of the day.',
+             'Send it to Jessica by the end of the day.'),
+            ("I'll pick you up at seven, actually make that eight.", "I'll pick you up at eight."),
+            ('Use the red one, sorry, the blue one for the header.', 'Use the blue one for the header.'),
+            ('Move it to Monday, wait no, Tuesday afternoon.', 'Move it to Tuesday afternoon.'),
+            ('Ship the beta, or rather the release candidate, on Friday.',
+             'Ship the release candidate on Friday.'),
+            ('Is it at four, no wait, at five?', 'Is it at five?'),
+            ('The new design is, like, way cleaner than the old one, you know.',
+             'The new design is way cleaner than the old one.'),
+        ]:
+            with self.subTest(s=s):
+                self.assertIsNone(guard(s, o))
+                self.assertIsNone(flow_llm.strict_reason(s, o, VOCAB))
+
+    def test_turn_that_up_never_becomes_off(self):
+        for s in ('can you turn that up a little', 'turn that up, no wait, turn that up more'):
+            self.assertIsNotNone(guard(s, 'Can you turn that off a little?'))
+        self.assertIsNotNone(guard('turn the volume up, sorry, turn it up more', 'Turn it off.'))
+
+    def test_dropped_question_rejected(self):
+        self.assertIsNotNone(guard('Can you check the logs? I think the deploy failed.', 'I think the deploy failed.'))
+        self.assertIsNotNone(guard('What time is it, sorry, I need to go now.', 'I need to go now.'))
+        self.assertIsNotNone(guard('Is it at four, no wait, at five?', 'Is it at five.'))
+
+    def test_dropped_clause_without_cue_rejected(self):
+        self.assertEqual(flow_llm.strict_reason('we should ship today and then check the logs tomorrow morning',
+                                                'We should ship today.'), 'dropped')
+        self.assertEqual(flow_llm.strict_reason(
+            'I want the header fixed and the footer moved down before the demo on Friday',
+            'I want the header fixed before the demo on Friday.'), 'dropped')
+
+    def test_not_a_replacement_or_protected_words(self):
+        # The words after the cue don't replace the abandoned ones.
+        self.assertEqual(flow_llm.strict_reason('Meet at four, no wait, I have no idea.', 'I have no idea.'),
+                         'dropped')
+        # Vocabulary terms and negations are never exempt.
+        self.assertEqual(flow_llm.strict_reason('Upload it to Cloudflare and Netlify, I mean to the server.',
+                                                'Upload it to the server.', VOCAB), 'dropped')
+        self.assertIsNotNone(guard("I can't come, no wait, I can come at five.", 'I can come at five.'))
+        # A number is exempt only when a number replaces it.
+        self.assertEqual(flow_llm.strict_reason('Book it for four people, sorry, book the big room.',
+                                                'Book the big room.'), 'dropped')
+        # The abandoned part stops at the sentence end and after 8 words.
+        self.assertEqual(flow_llm.strict_reason(
+            'Ship the update today. Move the old menu to the left side, no wait, the right side.',
+            'Move the old menu to the right side.'), 'dropped')
+
+    def test_like_and_you_know_only_as_fillers(self):
+        self.assertEqual(flow_llm._intended_drops('I like the new menu a lot', 'The new menu a lot', {1}, set()),
+                         set())
+        self.assertEqual(flow_llm._intended_drops('Do you know the answer', 'Do the answer', {1, 2}, set()), set())
+
+    def test_retry_not_needed_for_a_resolved_correction(self):
+        model = FakeModel()
+        self.addCleanup(model.close)
+        settings = {'conservativeCleanup': True, 'applyStyle': True,
+                    'llmCleanup': {'enabled': True, 'baseUrl': model.url, 'timeoutMs': 800, 'maxTimeoutMs': 900}}
+        with tempfile.TemporaryDirectory() as tmp:
+            shim.OPTIONS = Path(tmp) / 'local-dictation-options.json'
+            model.reply = "Let's meet at five in the lobby."
+            out, info = shim.flow_cleanup("Let's meet at four, no wait, at five in the lobby.", ctx=None,
+                                          category='other', vocabulary=[], settings=settings)
+            self.assertEqual(out, "Let's meet at five in the lobby.")
+            self.assertEqual((info['engine'], info.get('retry')), ('llm', None))
+            self.assertEqual(len(model.requests), 1)
+
+
 class PromptTests(unittest.TestCase):
     def test_rule_and_examples(self):
         self.assertIn('Never add a word the speaker did not say', flow_llm.SYSTEM_PROMPT)

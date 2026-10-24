@@ -201,11 +201,125 @@ def added_words(source: str, output: str, allowed: set[str] = frozenset()) -> li
     return added
 
 
+# Intended drops (2026-10-24). PR #1's strict check also rejected the light
+# cleanup's best edits: a self-correction resolved ("at four, no wait, at
+# five" -> "at five") and a filler "you know". These drops are exempt; every
+# other drop still counts against the budget below.
+_CUES = (('actually', 'make', 'that'), ('no', 'wait'), ('wait', 'no'), ('or', 'rather'),
+         ('scratch', 'that'), ('i', 'mean'), ('actually',), ('sorry',))
+_WH = {'what', 'who', 'whom', 'whose', 'where', 'when', 'why', 'how', 'which'}
+_I_WORDS = {'i', "i'm", "i'll", "i've", "i'd", 'i’m', 'i’ll', 'i’ve', 'i’d'}
+MAX_ABANDONED = 8  # words of the abandoned part before a correction cue
+
+
+def _tokens(text: str) -> list[dict]:
+    """_words() with context: the punctuation before/after each word, the
+    sentence number, and whether it is capitalised mid-sentence."""
+    out, sent, prev_end = [], 0, 0
+    for m in _TOKEN.finditer(text):
+        gap = text[prev_end:m.start()]
+        if out and re.search(r'[.!?]', gap):
+            sent += 1
+        if out:
+            out[-1]['post'] = gap
+        w = m.group(0)
+        out.append({'w': w.lower(), 'pre': gap, 'post': '', 'sent': sent,
+                    'name': w[0].isupper() and w.lower() not in _I_WORDS and bool(out)
+                    and out[-1]['sent'] == sent})
+        prev_end = m.end()
+    if out:
+        out[-1]['post'] = text[prev_end:]
+    return out
+
+
+def _is_number(w: str) -> bool:
+    return w.isdigit() or w in _NUMBER_WORDS or w.split('-')[0] in _NUMBER_WORDS
+
+
+def _intended_drops(source: str, output: str, dropped: set[int], vocab: set[str]) -> set[int]:
+    """Source word indexes whose drop is clearly intended:
+
+    * a self-correction: the cue ("no wait", "wait no", "I mean", "actually",
+      "actually make that", "sorry", "or rather", "scratch that") and the
+      abandoned words right before it (at most MAX_ABANDONED, same sentence),
+      when the words after the cue are kept and look like a replacement of
+      the abandoned ones (both hold a number, or both a name, or they start
+      with the same word). A number or name is exempt only if the
+      replacement has one too;
+    * the filler "you know" or "like" set off by commas (or a sentence edge).
+
+    Never exempt: negations, question words, vocabulary terms, a question
+    that the output no longer asks, or a drop with no cue."""
+    t = _tokens(source)
+    n = len(t)
+    exempt: set[int] = set()
+
+    def edge_before(i):
+        return ',' in t[i]['pre'] or i == 0 or t[i - 1]['sent'] != t[i]['sent']
+
+    def edge_after(i):
+        return ',' in t[i]['post'] or i == n - 1 or t[i + 1]['sent'] != t[i]['sent']
+
+    # Fillers set off by punctuation: "is, like, way", "the old one, you know."
+    for i in range(n):
+        if t[i]['w'] == 'like' and i in dropped and edge_before(i) and edge_after(i):
+            exempt.add(i)
+        if (i + 1 < n and t[i]['w'] == 'you' and t[i + 1]['w'] == 'know' and {i, i + 1} <= dropped
+                and edge_before(i) and edge_after(i + 1)):
+            exempt.update((i, i + 1))
+    # Self-corrections.
+    i = 0
+    while i < n:
+        cue = next((c for c in _CUES if tuple(x['w'] for x in t[i:i + len(c)]) == c), None)
+        if not cue:
+            i += 1
+            continue
+        c, e, sent = i, i + len(cue), t[i]['sent']
+        i = e
+        if t[e - 1]['sent'] != sent:
+            continue
+        start = c
+        while start > 0 and start - 1 in dropped and c - (start - 1) <= MAX_ABANDONED \
+                and t[start - 1]['sent'] == sent:
+            start -= 1
+        abandoned = list(range(start, c))
+        if not abandoned:
+            continue
+        # A word repeated right after the cue ("at four, no wait, at five")
+        # may be the one dropped by the alignment.
+        before = {t[k]['w'] for k in range(max(0, start - 2), c)}
+        r = e
+        while r < n and r in dropped and t[r]['w'] in before and r - e < 3 and t[r]['sent'] == sent:
+            r += 1
+        if r >= n or r in dropped or t[r]['sent'] != sent:
+            continue  # the replacement must be kept
+        repl = [k for k in range(e, min(n, r + len(abandoned) + 2)) if t[k]['sent'] == sent]
+        has_num = any(_is_number(t[k]['w']) for k in abandoned)
+        has_name = any(t[k]['name'] for k in abandoned)
+        repl_num = any(_is_number(t[k]['w']) for k in repl)
+        repl_name = any(t[k]['name'] for k in repl)
+        if not ((has_num and repl_num) or (has_name and repl_name) or t[abandoned[0]]['w'] == t[e]['w']
+                or t[abandoned[0]]['w'] == t[r]['w']):
+            continue  # not a recognisable replacement
+        if (has_num and not repl_num) or (has_name and not repl_name):
+            continue
+        last = max(k for k in range(n) if t[k]['sent'] == sent)
+        if '?' in t[last]['post'] and '?' not in output:
+            continue  # the question was lost
+        exempt.update(abandoned)
+        exempt.update(k for k in range(c, r) if k in dropped)
+    return {i for i in exempt
+            if t[i]['w'] not in _NEGATIONS and not t[i]['w'].endswith(("n't", "n’t"))
+            and t[i]['w'] not in _WH and t[i]['w'] not in vocab}
+
+
 def strict_reason(source: str, output: str, allowed: set[str] = frozenset()) -> str | None:
     """Agent prompts keep the speaker's words. Allowed: dropping fillers,
     repeats and cut-off fragments; spelling fixes and contractions ("seem" ->
     "seems", "they are" -> "they're", "evalue" -> "evaluate"); vocabulary
-    words and digits. Anything else may touch at most 2 words, or 1 in 25."""
+    words and digits; clearly intended drops (_intended_drops: a resolved
+    self-correction, a filler "you know"/"like"). Anything else may touch at
+    most 2 words, or 1 in 25."""
     from difflib import SequenceMatcher
     # Numbers stay as said: replay had "315am" -> "3:15 AM" and "For 410" -> "For $410".
     said = set(re.findall(r'\d+', source))
@@ -219,7 +333,8 @@ def strict_reason(source: str, output: str, allowed: set[str] = frozenset()) -> 
             joined.setdefault(''.join(a[i:i + n]), a[i:i + n])
     expanded = [x for w in b for x in (joined[w] if w in joined and w not in a else [w])]
     vocab = {w.lower() for v in allowed for w in _TOKEN.findall(v)}
-    dropped = added = respelled = 0
+    lost: set[int] = set()
+    added = respelled = 0
     for op, i1, i2, j1, j2 in SequenceMatcher(None, a, expanded, autojunk=False).get_opcodes():
         if op == 'equal':
             continue
@@ -227,8 +342,10 @@ def strict_reason(source: str, output: str, allowed: set[str] = frozenset()) -> 
                 None, ''.join(a[i1:i2]), ''.join(expanded[j1:j2])).ratio() >= 0.6:
             respelled += max(i2 - i1, j2 - j1)
             continue
-        dropped += sum(1 for i in range(i1, i2) if not _droppable(a, i))
+        lost.update(range(i1, i2))
         added += sum(1 for j in range(j1, j2) if expanded[j] not in vocab and not expanded[j].isdigit())
+    intended = _intended_drops(source, output, lost, vocab) if lost else set()
+    dropped = sum(1 for i in lost if not _droppable(a, i) and i not in intended)
     budget = max(2, len(a) // 25)
     if dropped > budget:
         return 'dropped'
