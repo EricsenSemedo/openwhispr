@@ -31,8 +31,11 @@ Phone link (optional, 127.0.0.1:18766 behind tailscale serve): /v1/health,
 from __future__ import annotations
 import importlib.util
 import json
+import os
+from datetime import datetime
 from pathlib import Path
 import re
+import shutil
 import sqlite3
 import sys
 import threading
@@ -73,9 +76,49 @@ CONTEXT = flow_context.ContextCache()
 _last_vocabulary: list[str] = []
 
 
+LOG_MAX_BYTES = 2 * 1024 * 1024
+LOG_KEEP = 3  # adapter.log.1 .. adapter.log.3
+_log_lock = threading.Lock()
+
+
 def log(event, **fields):
     # Timing and decisions only; dictated text is never logged.
-    print(json.dumps({'t': time.strftime('%H:%M:%S'), 'event': event, **fields}), flush=True)
+    # 't' is local ISO 8601 with the UTC offset (2026-10-23T21:05:09-04:00).
+    line = json.dumps({'t': datetime.now().astimezone().isoformat(timespec='seconds'), 'event': event, **fields})
+    with _log_lock:
+        print(line, flush=True)
+        rotate_own_log()
+
+
+def rotate_own_log(path: Path | None = None) -> bool:
+    """Size-based rotation of local-asr-logs\\adapter.log (2026-10-23).
+
+    The supervisor opens that file and hands it to this process as stdout and
+    stderr, and Windows does not let an open file be renamed. So the adapter
+    copies it to adapter.log.1 (older copies shift up to LOG_KEEP), then
+    truncates its own handle and seeks to the start ("copytruncate"). It acts
+    only when stdout really is that file. cleanup-llm.log belongs to
+    llama-server and is not touched."""
+    try:
+        fd = sys.stdout.fileno()
+        st = os.fstat(fd)
+        if st.st_size <= LOG_MAX_BYTES:
+            return False
+        path = path or profile_dir() / 'local-asr-logs' / 'adapter.log'
+        if not os.path.samestat(st, os.stat(path)):
+            return False
+        sys.stdout.flush()
+        sys.stderr.flush()
+        for i in range(LOG_KEEP - 1, 0, -1):
+            older = path.with_name(f'{path.name}.{i}')
+            if older.exists():
+                os.replace(older, path.with_name(f'{path.name}.{i + 1}'))
+        shutil.copyfile(path, path.with_name(path.name + '.1'))
+        os.ftruncate(fd, 0)
+        os.lseek(fd, 0, os.SEEK_SET)
+        return True
+    except (OSError, ValueError, AttributeError):
+        return False  # logging must never break a dictation
 
 
 def options():
@@ -141,6 +184,15 @@ def split_dictionary(system_prompt):
     return [w.strip() for w in tail.split(',') if w.strip()][:200]
 
 
+def warm_prefix():
+    """Vocabulary and hints the next dictation will most likely send, built
+    the way flow_cleanup builds them, so warm() caches the same prompt start.
+    The app's dictionary is known from the last cleanup request."""
+    direct, hints = flow_learn.split_pairs(flow_learn.load_pairs(profile_dir()))
+    vocabulary = _last_vocabulary or local_vocabulary()
+    return merge_terms(vocabulary, (t for _, t in direct + hints)), hints
+
+
 def ask_model(cfg):
     def ask(system, user):
         return flow_llm.call_model(cfg['baseUrl'], cfg.get('model', 'cleanup'), system, user, 3,
@@ -178,6 +230,10 @@ def flow_cleanup(text, *, ctx, category, vocabulary, settings, use_rules=True):
         before, text = text, flow_text.numbers_to_digits(text)
         if text != before:
             fixes.append('digits')
+    # After scratch_that, which reads an ellipsis as a sentence end.
+    before, text = text, flow_text.drop_pause_ellipses(text, style, set(vocabulary))
+    if text != before:
+        fixes.append('ellipsis')
     if fixes:
         info['fixes'] = fixes
     cfg = llm_config(settings)
@@ -190,6 +246,8 @@ def flow_cleanup(text, *, ctx, category, vocabulary, settings, use_rules=True):
                                                   vocabulary=vocabulary, hints=hints, cfg=cfg)
         info.update(llm_info)
         if out:
+            # The model may type pauses as "..." too.
+            out = flow_text.drop_pause_ellipses(out, style, set(vocabulary))
             text = flow_text.fix_vocabulary(out, vocabulary)
     elif cfg:
         info['skipped'] = 'short'
@@ -437,8 +495,11 @@ class LocalCleanupShim(asr.ShimHandler):
                     cfg = llm_config(settings)
                     if cfg:
                         # The app isn't known yet; keep both prompts warm.
+                        vocabulary, hints = warm_prefix()
                         for category in ('other', 'agent'):
-                            threading.Thread(target=flow_llm.warm, args=(cfg, category), daemon=True).start()
+                            threading.Thread(target=flow_llm.warm, args=(
+                                cfg, category, vocabulary, hints, style_for(category, settings)),
+                                daemon=True).start()
                 except Exception:
                     pass  # extras must never block speech recognition
             super().do_POST()
@@ -590,7 +651,9 @@ class PhoneLinkHandler(BaseHTTPRequestHandler):
             ctx = {'exe': str(app.get('package') or 'Android app')[:100],
                    'before': str(context.get('before') or '')[-400:] or None,
                    'after': str(context.get('after') or '')[:200] or None}
-            vocabulary = [w for w in body.get('dictionary') or [] if isinstance(w, str)][:200]
+            # A string here would otherwise become one vocabulary "word" per character.
+            words = body.get('dictionary')
+            vocabulary = [w for w in words if isinstance(w, str)][:200] if isinstance(words, list) else []
             vocabulary = merge_terms(local_vocabulary(), vocabulary, (r[0] for r in local_db_rows(
                 'select word from custom_dictionary where deleted_at is null')))
         except (ValueError, TypeError, AttributeError) as exc:
@@ -598,9 +661,11 @@ class PhoneLinkHandler(BaseHTTPRequestHandler):
             return
         t0 = time.monotonic()
         try:
-            # The phone already ran its own filler rules.
+            # The phone runs its own filler rules first, but they miss some
+            # (um/uh survived agent-mode phone requests), so the PC rules run
+            # again here, as on the PC. They change nothing that is clean.
             out, info = flow_cleanup(text, ctx=ctx, category=category, vocabulary=vocabulary,
-                                     settings=settings, use_rules=False)
+                                     settings=settings, use_rules=True)
         except Exception as exc:
             out, info = text, {'engine': 'rules', 'error': type(exc).__name__}
         ms = round((time.monotonic() - t0) * 1000)
@@ -613,10 +678,11 @@ def start_phone_link(settings):
     link = settings.get('phoneLink')
     if not isinstance(link, dict) or link.get('enabled') is not True or not link.get('owner'):
         return
-    port = int(link.get('port', 18766))
     try:
+        # A typo in the port must not stop the adapter (and PC dictation) from starting.
+        port = int(link.get('port', 18766))
         server = ThreadingHTTPServer(('127.0.0.1', port), PhoneLinkHandler)
-    except OSError as exc:
+    except (OSError, ValueError, TypeError, OverflowError) as exc:
         log('phone-link-unavailable', error=str(exc))
         return
     server.daemon_threads = True

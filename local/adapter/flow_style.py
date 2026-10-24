@@ -128,6 +128,14 @@ _PROPER = {"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "
 _SPACE_AFTER = set('.,!?;:…)]}”’')
 
 
+def lowerable(word: str, dictionary=frozenset()) -> bool:
+    """A Titlecase word that may be lower-cased mid-sentence: a common
+    English word, not I/I'm/..., not a day, month or similar name, and not
+    one of the user's dictionary terms."""
+    return (bool(re.fullmatch(r"[A-Z][a-z'’]+", word)) and word not in _I_FORMS
+            and word.lower() not in _PROPER and word.lower() in common_words() and word not in dictionary)
+
+
 def cursor_adjust(text: str, before: str | None, after: str | None,
                   dictionary: set[str] | frozenset[str] = frozenset()) -> str:
     """Fit pasted text to the text around the cursor (None = unknown)."""
@@ -144,9 +152,7 @@ def cursor_adjust(text: str, before: str | None, after: str | None,
         if sentence_start:
             if word[0].islower() and word.lower() in common_words():
                 text = text[:pos] + word[0].upper() + text[pos + 1:]
-        elif ((pb[-1:].isalnum() or pb[-1:] == ',') and re.fullmatch(r"[A-Z][a-z'’]+", word)
-              and word not in _I_FORMS and word.lower() not in _PROPER
-              and word.lower() in common_words() and word not in dictionary):
+        elif (pb[-1:].isalnum() or pb[-1:] == ',') and lowerable(word, dictionary):
             text = text[:pos] + word[0].lower() + text[pos + 1:]
     if not sentence_start and after is not None:
         nxt = after.lstrip(' \t')

@@ -27,3 +27,9 @@ public repo; replays against real history belong outside it.
 Deploy: copy the changed files into the adapter folder, then end the
 `local_cleanup_shim.py` python process. The supervisor restarts it in about
 2 s; OpenWhispr itself keeps running.
+
+Logs: the supervisor writes the adapter's output to
+`profile\local-asr-logs\adapter.log`. Each JSON line carries `t`, the local
+ISO 8601 time with its UTC offset. Above 2 MB the adapter copies the file to
+`adapter.log.1` (keeping 3 copies) and empties it in place; `cleanup-llm.log`
+belongs to llama-server and is not rotated by the adapter.

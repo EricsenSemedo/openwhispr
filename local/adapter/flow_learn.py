@@ -12,6 +12,17 @@ words, and asks a model to approve the rest. This does the same locally:
   * when both words are common English words ("sent" -> "Send", "Astro" ->
     "Astra"), the local model decides; if it is unavailable, nothing is learned.
 
+Junk filter (2026-10-23, after a function word, a grammar fix and a word
+glued to its neighbour were learned as vocabulary):
+  * a source among the 100 most frequent English words ("the", "and", "time")
+    is never learned: those 100 words make up about half of all running
+    English text, so a hint for one would reach almost every dictation;
+  * a target that is the source glued to a neighbouring word ("the" ->
+    "boxthe", "flare" -> "Cloudflare") is a word-boundary slip of the edit
+    diff, not a mishearing;
+  * a rare target that shares few letters with the source (similarity under
+    0.5) needs the model's yes, like a common one.
+
 Pairs are stored as {"from", "to"}. When the misheard form is itself an
 unusual word ("TealScale") it is replaced directly; when it is a real word
 ("roadblocks" -> Roblox) it is only passed to the cleanup model as a hint.
@@ -24,9 +35,14 @@ import threading
 import time
 from pathlib import Path
 
-from flow_style import common_words
+from difflib import SequenceMatcher
+
+from flow_style import DATA_DIR, common_words
 
 MAX_CANDIDATES = 4
+TOP_COMMON = 100  # see the module docstring
+MIN_SIMILARITY = 0.5
+_top: frozenset[str] | None = None
 _lock = threading.Lock()
 _WORD = re.compile(r"[\w'’.]+")
 
@@ -66,6 +82,40 @@ def _is_common(word: str) -> bool:
     return False
 
 
+def _top_common() -> frozenset[str]:
+    global _top
+    if _top is None:
+        try:
+            lines = (DATA_DIR / 'common-en-30k.txt').read_text(encoding='utf-8').split()
+        except OSError:
+            lines = []
+        _top = frozenset(lines[:TOP_COMMON])
+    return _top
+
+
+def _letters(text: str) -> str:
+    return re.sub(r"[^\w]|_", '', text.lower())
+
+
+def is_joined(src: str, dst: str, sentence: str = '') -> bool:
+    """dst is src glued to a neighbouring word ("the" -> "boxthe")."""
+    s, d = _letters(src), _letters(dst)
+    if not s or len(d) <= len(s):
+        return False
+    if d.startswith(s):
+        rest = d[len(s):]
+    elif d.endswith(s):
+        rest = d[:-len(s)]
+    else:
+        return False
+    nearby = {w.lower().strip(".'’") for w in _WORD.findall(sentence)}
+    return len(rest) >= 2 and (rest in common_words() or rest in nearby)
+
+
+def similarity(src: str, dst: str) -> float:
+    return SequenceMatcher(None, src.lower(), dst.lower()).ratio()
+
+
 def is_direct(from_text: str) -> bool:
     """Replace directly only when the misheard form can't be a real phrase."""
     words = _WORD.findall(from_text)
@@ -98,7 +148,11 @@ def review(candidates: list[dict], sentence: str, ask_model,
             reason = 'short'
         elif any(ch.isdigit() for ch in src + dst):
             reason = 'digits'
-        elif not _is_common(dst):
+        elif len(_WORD.findall(src)) == 1 and src.lower().strip(".'’") in _top_common():
+            reason = 'common-source'
+        elif is_joined(src, dst, sentence):
+            reason = 'joined'
+        elif not _is_common(dst) and similarity(src, dst) >= MIN_SIMILARITY:
             accepted.append({'from': src, 'to': dst, 'why': 'rare-word'})
             continue
         elif deadline is not None and time.monotonic() > deadline:
