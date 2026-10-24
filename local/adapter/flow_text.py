@@ -9,12 +9,14 @@ vocabulary) after the local model:
                           -> "PR 142", "sixty five K" -> "65K". Counting ("one, two,
                           three"), small amounts ("five seconds") and times stay words.
   * scratch_that()      - "Blue walls. Oh, scratch that." deletes "Blue walls.".
+  * drop_pause_ellipses() - "I was thinking... Maybe we" -> "I was thinking maybe
+                          we" (2026-10-23; also applied to the model's output).
 """
 from __future__ import annotations
 
 import re
 
-from flow_style import common_words
+from flow_style import _first_plain_word, common_words, lowerable
 
 # ---------------------------------------------------------------- vocabulary
 
@@ -257,3 +259,53 @@ def scratch_that(text: str) -> str:
             break
         text = result
     return text
+
+
+# ------------------------------------------------------------ pause ellipses
+
+# Speech recognisers (whisper.cpp on the phone in particular) type "..." where
+# the speaker only paused. The speaker did not ask for that punctuation.
+_ELLIPSIS = re.compile(r"[ \t]*(?:\.{3,}|…)[ \t]*")
+_QUOTED = re.compile(r'"[^"\n]*"|“[^”\n]*”')
+_SPACES = re.compile(r"(?<=\S)[ \t]{2,}(?=\S)")
+
+
+def drop_pause_ellipses(text: str, style: str = 'formal', dictionary=frozenset()) -> str:
+    """Pause ellipses go and double spaces collapse to one.
+
+    * Mid-text: "thinking... Maybe we" -> "thinking maybe we". The next word is
+      lower-cased only under the cursor casing rules (a common word; not I, a
+      name or a dictionary term) and only when no sentence ended before it.
+    * At the end of a line or of the text: "." in formal style, nothing in
+      casual, and nothing after other punctuation.
+    * At the start of a line or before other punctuation: removed.
+    Quoted spans and number ranges ("1...5") are left alone. Run it after
+    scratch_that(), which treats an ellipsis as a sentence end."""
+    if not text or ('...' not in text and '…' not in text and '  ' not in text and '\t' not in text):
+        return text
+    quoted = [m.span() for m in _QUOTED.finditer(text)]
+    out, pos = [], 0
+    for m in _ELLIPSIS.finditer(text):
+        a, b = m.span()
+        if any(qa <= a < qb or qa < b <= qb for qa, qb in quoted):
+            continue
+        prev, nxt = text[:a], text[b:b + 1]
+        if prev[-1:].isdigit() and nxt.isdigit():
+            continue
+        out.append(text[pos:a])
+        pos = b
+        if not nxt or nxt in '\r\n':
+            tail = prev.rstrip()
+            if style != 'casual' and tail and tail[-1] not in '.!?,;:':
+                out.append('.')
+            continue
+        if not prev.strip(' \t') or prev[-1:] in '\r\n' or nxt in '.!?,;:)':
+            continue
+        out.append(' ')
+        rest = text[b:]
+        _, word = _first_plain_word(rest)
+        if word and rest.startswith(word) and prev.rstrip()[-1:] not in '.!?' and lowerable(word, dictionary):
+            out.append(word[0].lower())
+            pos = b + 1
+    out.append(text[pos:])
+    return _SPACES.sub(' ', ''.join(out))
