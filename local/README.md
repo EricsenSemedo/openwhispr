@@ -23,7 +23,10 @@ equivalent feature, drop the matching commit.
 
 ## Update to a new upstream release
 
-Run on Windows (PowerShell paths shown; Python 3.12, Node 22+, Git).
+Run on Windows (PowerShell paths shown; Python 3.12, Node 24+, Git).
+Upstream requires Node 24 since v1.11.0. On JamPC a portable copy is at
+`%LOCALAPPDATA%\Programs\node-v24.22.2`; put it first on `PATH` for the
+session. Install dev dependencies with `npm ci --ignore-scripts`.
 
 1. `git fetch upstream --tags` and pick the release tag, e.g. `v1.10.4`.
 2. Get `OpenWhispr-Setup-<version>.exe` and its sha256 from the GitHub
@@ -37,8 +40,12 @@ Run on Windows (PowerShell paths shown; Python 3.12, Node 22+, Git).
    Resolve conflicts, keeping each local commit's intent. Merging (not
    rebasing) keeps `local` free of force-pushes, so each update is a normal PR.
 6. Run the whole suite on the merge and on the upstream tag
-   (`node --import tsx --test "test/**/*.test.js"`); the merge may only fail
-   tests that also fail upstream on Windows. Then `cd src && npx tsc --noEmit`.
+   (`node --import tsx --test --test-concurrency=6 "test/**/*.test.js"`); the
+   merge may only fail tests that also fail upstream on Windows. Run the two
+   suites one after the other: two at once overload the PC (Vite watch
+   errors, timeouts). Each takes about 10 minutes. For the upstream run, use
+   a `git worktree` of the tag with `node_modules` as a junction to this
+   checkout's. Then `cd src && npx tsc --noEmit`.
 7. Build: `python -I local/build.py --official <downloads>\official --out <OpenWhisprLocal>\client\openwhispr-v<version>-local --ref update/v<version>`
 8. Push `update/v<version>` and open a PR into `local` on the fork. Stop
    there: the owner merges.
