@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import re
 import time
+import urllib.error
 import urllib.request
 
 SYSTEM_PROMPT = """You clean up dictated text. The user spoke the text inside <transcript> and it will be typed into the app described in <context>.
@@ -488,6 +489,8 @@ def clean_with_model(text: str, *, ctx, style, category, vocabulary, hints, cfg)
             if not attempt:
                 info.update(engine='rules', fallback=type(exc).__name__,
                             ms=round((time.monotonic() - t0) * 1000))
+                if isinstance(exc, urllib.error.HTTPError):
+                    info['fallbackStatus'] = exc.code
                 return None, info
             info['retry'] = type(exc).__name__
             break

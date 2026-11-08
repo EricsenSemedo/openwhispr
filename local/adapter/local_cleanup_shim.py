@@ -45,6 +45,7 @@ from cleanup_filter import clean_text
 import flow_context
 import flow_learn
 import flow_llm
+import flow_recovery
 import flow_style
 import flow_text
 
@@ -119,6 +120,10 @@ def rotate_own_log(path: Path | None = None) -> bool:
         return True
     except (OSError, ValueError, AttributeError):
         return False  # logging must never break a dictation
+
+
+RESTARTER = flow_recovery.Restarter(lambda: profile_dir(), log)
+asr.recover_backend = RESTARTER.recover_speech
 
 
 def options():
@@ -245,6 +250,11 @@ def flow_cleanup(text, *, ctx, category, vocabulary, settings, use_rules=True):
         out, llm_info = flow_llm.clean_with_model(text, ctx=ctx, style=style, category=category,
                                                   vocabulary=vocabulary, hints=hints, cfg=cfg)
         info.update(llm_info)
+        if llm_info.get('fallbackStatus') == 500:
+            # llama-server answers 500 after the GPU device is lost, and it keeps
+            # doing so. This dictation gets the rules text; the next one gets a
+            # fresh model. A time-out (a busy GPU) is not a reason to restart.
+            RESTARTER.restart_soon('cleanup-llm', 'model-http-500')
         if out:
             # The model may type pauses as "..." too.
             out = flow_text.drop_pause_ellipses(out, style, set(vocabulary))

@@ -20,12 +20,14 @@ backend's call and everything else works as-is. See README.md for details.
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import re
 import subprocess
 import tempfile
 import time
+import urllib.error
 import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -189,9 +191,63 @@ def tail_padded_copy(wav_path: str, seconds: float = RETRY_TAIL_SECONDS) -> str 
     return out_path
 
 
+# Set by the adapter (flow_recovery): called with a probe after a decode failed
+# because of the server. Returns True when decoding again is worth trying.
+recover_backend = None
+
+
+def backend_failed(exc: Exception) -> bool:
+    """The server itself failed: a 5xx, a refused or dropped connection, or a
+    time-out. A 4xx is about the request, and restarting would not help it."""
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code >= 500
+    return isinstance(exc, (urllib.error.URLError, OSError, http.client.HTTPException))
+
+
+def probe_wav_bytes(seconds: float = 0.5, rate: int = 16000) -> bytes:
+    """A low tone, not silence: the server must really run the model to answer."""
+    import array
+    import io
+    import math
+    import wave
+    samples = array.array("h", (round(1500 * math.sin(2 * math.pi * 220 * i / rate)) for i in range(int(seconds * rate))))
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as out:
+        out.setnchannels(1)
+        out.setsampwidth(2)
+        out.setframerate(rate)
+        out.writeframes(samples.tobytes())
+    return buffer.getvalue()
+
+
+def backend_answers(model: str) -> bool:
+    """Decodes a tiny clip. An answer of any text means the server works."""
+    fd, path = tempfile.mkstemp(suffix=".wav")
+    try:
+        with os.fdopen(fd, "wb") as out:
+            out.write(probe_wav_bytes())
+        request = build_nemo_request(path, model, None, None)
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(request, timeout=10) as response:
+            return isinstance(json.load(response), dict)
+    except (OSError, ValueError, http.client.HTTPException):
+        return False
+    finally:
+        os.remove(path)
+
+
+def transcribe_recovering(wav_path: str, model: str, language: str | None, prompt: str | None) -> str:
+    try:
+        return transcribe(wav_path, model, language, prompt)
+    except Exception as exc:
+        if not backend_failed(exc) or recover_backend is None or not recover_backend(lambda: backend_answers(model)):
+            raise
+    return transcribe(wav_path, model, language, prompt)
+
+
 def transcribe_with_retry(wav_path: str, model: str, language: str | None,
                           prompt: str | None) -> str:
-    text = transcribe(wav_path, model, language, prompt)
+    text = transcribe_recovering(wav_path, model, language, prompt)
     if (text or "").strip():
         return text
     for kind, make_copy in (("tail", tail_padded_copy), ("gain", louder_copy)):
