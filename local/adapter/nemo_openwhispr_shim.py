@@ -128,6 +128,14 @@ def transcribe(audio_path: str, model: str, language: str | None, prompt: str | 
 # 3 and was transcribed correctly at +6 dB). An empty result for a clip that
 # has sound is retried once, 6 dB louder. Digital silence (a gated or muted
 # mic) and very quiet clips are not retried, so noise never turns into words.
+#
+# Replay 2026-11-08: the gain retry recovered 0 of its 4 live tries, and 1 of
+# the 7 sounding clips in the whole history that decode empty. The same clip
+# with half a second of silence added at the end recovered 6 of the 7: these
+# are short dictations that end right at the last word, not quiet ones. So the
+# silence is tried first, then the gain. Only on an empty result: padding every
+# clip changed a third of the good transcripts with no gain.
+RETRY_TAIL_SECONDS = 0.5
 RETRY_GAIN_DB = 6.0
 RETRY_MIN_PEAK = 328         # about -40 dBFS on 16-bit samples
 RETRY_MAX_SECONDS = 60       # bounds the extra work on a long clip
@@ -158,21 +166,48 @@ def louder_copy(wav_path: str, gain_db: float = RETRY_GAIN_DB) -> str | None:
     return out_path
 
 
+def tail_padded_copy(wav_path: str, seconds: float = RETRY_TAIL_SECONDS) -> str | None:
+    """A temp WAV with `seconds` of silence added at the end, or None under the
+    same conditions as louder_copy(). The caller removes the returned file."""
+    import array
+    import wave
+    with wave.open(wav_path, "rb") as src:
+        params = src.getparams()
+        if params.sampwidth != 2 or params.nchannels != 1 or params.comptype != "NONE":
+            return None
+        if params.nframes > RETRY_MAX_SECONDS * params.framerate:
+            return None
+        frames = src.readframes(params.nframes)
+    samples = array.array("h", frames)
+    if not samples or max(max(samples), -min(samples)) < RETRY_MIN_PEAK:
+        return None
+    fd, out_path = tempfile.mkstemp(suffix=".wav")
+    os.close(fd)
+    with wave.open(out_path, "wb") as dst:
+        dst.setparams(params)
+        dst.writeframes(frames + b"\0\0" * int(seconds * params.framerate))
+    return out_path
+
+
 def transcribe_with_retry(wav_path: str, model: str, language: str | None,
                           prompt: str | None) -> str:
     text = transcribe(wav_path, model, language, prompt)
     if (text or "").strip():
         return text
-    louder = louder_copy(wav_path)
-    if louder is None:
-        return text
-    try:
-        retried = transcribe(louder, model, language, prompt)
-    finally:
-        os.remove(louder)
-    print(json.dumps({"t": time.strftime("%H:%M:%S"), "event": "asr-retry", "gain_db": RETRY_GAIN_DB,
-                      "recovered": bool((retried or "").strip())}), flush=True)
-    return retried if (retried or "").strip() else text
+    for kind, make_copy in (("tail", tail_padded_copy), ("gain", louder_copy)):
+        copy = make_copy(wav_path)
+        if copy is None:
+            return text
+        try:
+            retried = transcribe(copy, model, language, prompt)
+        finally:
+            os.remove(copy)
+        recovered = bool((retried or "").strip())
+        print(json.dumps({"t": time.strftime("%H:%M:%S"), "event": "asr-retry", "kind": kind,
+                          "recovered": recovered}), flush=True)
+        if recovered:
+            return retried
+    return text
 
 
 class ShimHandler(BaseHTTPRequestHandler):

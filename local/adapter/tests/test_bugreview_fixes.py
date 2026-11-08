@@ -4,7 +4,8 @@
 
 1. The strict guard (strict_reason) checks the cleanup model in every app, and
    a rejected light cleanup is retried once with the minimal agent prompt.
-2. An empty transcript for a clip that has sound is retried once, 6 dB louder.
+2. An empty transcript for a clip that has sound is retried with trailing
+   silence (2026-11-08), then 6 dB louder.
 
 No model or speech server is called: both are replaced by fakes. The fixtures
 are made-up sentences.
@@ -158,7 +159,7 @@ class AsrRetryTests(unittest.TestCase):
             with wave.open(path, 'rb') as w:
                 frames = array.array('h', w.readframes(w.getnframes()))
             calls.append({'path': path, 'peak': max(map(abs, frames)) if frames else 0,
-                          'model': model, 'prompt': prompt})
+                          'frames': len(frames), 'model': model, 'prompt': prompt})
             return replies[len(calls) - 1]
         asr.transcribe = transcribe
         return calls
@@ -183,16 +184,44 @@ class AsrRetryTests(unittest.TestCase):
         long_clip = self.wav('long.wav', tone(5000, seconds=asr.RETRY_MAX_SECONDS + 1))
         self.assertIsNone(asr.louder_copy(long_clip))
 
-    def test_empty_transcript_with_sound_is_retried_louder(self):
+    def test_empty_transcript_with_sound_is_retried_with_trailing_silence_first(self):
         src = self.wav('speech.wav', tone(6000))
         calls = self.fake_transcribe(['', 'Water the tomatoes at six.'])
         self.assertEqual(asr.transcribe_with_retry(src, 'parakeet-v3-q8', None, 'Dana'),
                          'Water the tomatoes at six.')
         self.assertEqual(len(calls), 2)
         self.assertEqual(calls[0]['path'], src)
-        self.assertGreater(calls[1]['peak'], calls[0]['peak'] * 1.9)
+        self.assertEqual(calls[1]['peak'], calls[0]['peak'])  # no gain on this try
+        self.assertEqual(calls[1]['frames'], calls[0]['frames'] + 8000)  # 0.5 s more at 16 kHz
         self.assertEqual((calls[1]['model'], calls[1]['prompt']), ('parakeet-v3-q8', 'Dana'))
-        self.assertFalse(os.path.exists(calls[1]['path']))  # the louder copy is removed
+        self.assertFalse(os.path.exists(calls[1]['path']))  # the padded copy is removed
+
+    def test_then_retried_louder(self):
+        src = self.wav('speech.wav', tone(6000))
+        calls = self.fake_transcribe(['', '', 'Water the tomatoes at six.'])
+        self.assertEqual(asr.transcribe_with_retry(src, 'parakeet-v3-q8', None, 'Dana'),
+                         'Water the tomatoes at six.')
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(calls[2]['frames'], calls[0]['frames'])  # the original length
+        self.assertGreater(calls[2]['peak'], calls[0]['peak'] * 1.9)
+        self.assertFalse(os.path.exists(calls[2]['path']))  # the louder copy is removed
+
+    def test_padded_copy_keeps_samples_and_format(self):
+        src = self.wav('speech.wav', tone(6000))
+        out = asr.tail_padded_copy(src, 0.25)
+        self.addCleanup(os.remove, out)
+        with wave.open(src, 'rb') as a, wave.open(out, 'rb') as b:
+            self.assertEqual(b.getparams()[:3], a.getparams()[:3])
+            frames = a.getnframes()
+            self.assertEqual(b.readframes(frames), a.readframes(frames))
+            self.assertEqual(b.readframes(a.getframerate()), b'\0\0' * (a.getframerate() // 4))
+
+    def test_no_padded_retry_for_silence_quiet_audio_or_long_clips(self):
+        self.assertIsNone(asr.tail_padded_copy(self.wav('zero.wav', [0] * 16000)))
+        self.assertIsNone(asr.tail_padded_copy(self.wav('quiet.wav', tone(300))))
+        self.assertIsNone(asr.tail_padded_copy(self.wav('empty.wav', [])))
+        self.assertIsNone(asr.tail_padded_copy(self.wav('stereo.wav', tone(5000), channels=2)))
+        self.assertIsNone(asr.tail_padded_copy(self.wav('long.wav', tone(5000, seconds=61))))
 
     def test_silent_clip_stays_empty_without_retry(self):
         calls = self.fake_transcribe([''])
@@ -206,10 +235,11 @@ class AsrRetryTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
 
     def test_retry_that_finds_nothing_returns_empty(self):
-        calls = self.fake_transcribe(['', '   '])
+        calls = self.fake_transcribe(['', '   ', ''])
         self.assertEqual(asr.transcribe_with_retry(self.wav('n.wav', tone(6000)), 'm', None, None), '')
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(calls), 3)
         self.assertFalse(os.path.exists(calls[1]['path']))
+        self.assertFalse(os.path.exists(calls[2]['path']))
 
 
 if __name__ == '__main__':
