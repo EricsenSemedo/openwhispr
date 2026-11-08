@@ -257,8 +257,32 @@ def transcribe_recovering(wav_path: str, model: str, language: str | None, promp
     return transcribe(wav_path, model, language, prompt)
 
 
+# A gated or muted mic records exact zeros, and the model can still "hear" words
+# in that: one clip with a peak of 0 pasted 2 words (replay 2026-11-08, all 502
+# recordings: 16 clips peak under 50, and the quietest clip with 3+ words peaks at
+# 2,579). Nothing was said, so such a clip is not decoded at all.
+SILENT_PEAK = 50
+
+
+def is_silent(wav_path: str) -> bool:
+    import array
+    import wave
+    try:
+        with wave.open(wav_path, "rb") as src:
+            params = src.getparams()
+            if params.sampwidth != 2 or params.comptype != "NONE":
+                return False
+            samples = array.array("h", src.readframes(params.nframes))
+    except (OSError, EOFError, wave.Error):
+        return False
+    return not samples or max(max(samples), -min(samples)) < SILENT_PEAK
+
+
 def transcribe_with_retry(wav_path: str, model: str, language: str | None,
                           prompt: str | None) -> str:
+    if is_silent(wav_path):
+        print(json.dumps({"t": time.strftime("%H:%M:%S"), "event": "asr-skip-silence"}), flush=True)
+        return ""
     text = transcribe_recovering(wav_path, model, language, prompt)
     if (text or "").strip():
         return text

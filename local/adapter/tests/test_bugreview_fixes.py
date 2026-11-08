@@ -223,10 +223,23 @@ class AsrRetryTests(unittest.TestCase):
         self.assertIsNone(asr.tail_padded_copy(self.wav('stereo.wav', tone(5000), channels=2)))
         self.assertIsNone(asr.tail_padded_copy(self.wav('long.wav', tone(5000, seconds=61))))
 
-    def test_silent_clip_stays_empty_without_retry(self):
-        calls = self.fake_transcribe([''])
-        self.assertEqual(asr.transcribe_with_retry(self.wav('zero.wav', [0] * 32000), 'm', None, None), '')
+    def test_silence_is_not_decoded(self):
+        # The model can "hear" words in exact zeros, so it never gets the chance.
+        calls = self.fake_transcribe(['Thank you.'])
+        for name, samples in (('zero.wav', [0] * 32000), ('hiss.wav', tone(49)), ('empty.wav', [])):
+            self.assertEqual(asr.transcribe_with_retry(self.wav(name, samples), 'm', None, None), '')
+        self.assertEqual(calls, [])
+
+    def test_quiet_but_real_audio_is_still_decoded(self):
+        calls = self.fake_transcribe(['Water the tomatoes.'])
+        self.assertEqual(asr.transcribe_with_retry(self.wav('low.wav', tone(60)), 'm', None, None),
+                         'Water the tomatoes.')
         self.assertEqual(len(calls), 1)
+
+    def test_a_clip_that_is_not_plain_pcm_is_decoded(self):
+        path = self.wav('8bit.wav', [200] * 1000, width=1)
+        self.assertFalse(asr.is_silent(path))
+        self.assertFalse(asr.is_silent(str(Path(self.dir.name) / 'missing.wav')))
 
     def test_text_is_never_retried(self):
         calls = self.fake_transcribe(['Hello there.'])
