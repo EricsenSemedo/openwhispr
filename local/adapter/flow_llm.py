@@ -469,6 +469,14 @@ def _reason(text: str, out: str, allowed: set[str], hints) -> str | None:
             or strict_reason(text, out, allowed))
 
 
+def _device_lost(exc: urllib.error.HTTPError) -> bool:
+    """llama-server's error text after a GPU reset: "... ErrorDeviceLost"."""
+    try:
+        return b'devicelost' in exc.read(4096).lower().replace(b' ', b'')
+    except OSError:
+        return False
+
+
 def clean_with_model(text: str, *, ctx, style, category, vocabulary, hints, cfg) -> tuple[str | None, dict]:
     """Returns (cleaned text or None, info)."""
     t0 = time.monotonic()
@@ -491,6 +499,8 @@ def clean_with_model(text: str, *, ctx, style, category, vocabulary, hints, cfg)
                             ms=round((time.monotonic() - t0) * 1000))
                 if isinstance(exc, urllib.error.HTTPError):
                     info['fallbackStatus'] = exc.code
+                    if _device_lost(exc):
+                        info['deviceLost'] = True
                 return None, info
             info['retry'] = type(exc).__name__
             break

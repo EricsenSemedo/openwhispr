@@ -32,8 +32,8 @@ asr = shim.asr
 EXE = r'C:\apps\runtime\nemo\nemo-speech.exe'
 
 
-def http_error(code):
-    return urllib.error.HTTPError('http://127.0.0.1/', code, 'failed', {}, BytesIO(b'{}'))
+def http_error(code, body=b'{}'):
+    return urllib.error.HTTPError('http://127.0.0.1/', code, 'failed', {}, BytesIO(body))
 
 
 class Clock:
@@ -124,6 +124,56 @@ class RestartTests(unittest.TestCase):
         self.assertEqual(self.ended, [4242])
         self.assertEqual(self.logged[-1][0], 'service-recovered')
 
+    def test_a_server_still_loading_is_not_ended(self):
+        r = self.make()
+        status = r.profile_dir() / 'local-asr-logs' / 'status.json'
+        data = json.loads(status.read_text())
+        data['services']['nemo']['status'] = 'loading'
+        status.write_text(json.dumps(data))
+        self.assertFalse(r.restart('nemo', 'test'))
+        self.assertEqual(self.ended, [])
+        answers = iter([False, False, True])
+        self.assertTrue(r.recover_speech(lambda: next(answers)))  # it waits instead
+        self.assertEqual(self.ended, [])
+
+    def test_a_load_that_finishes_broken_is_ended_during_the_wait(self):
+        r = self.make()
+        status = r.profile_dir() / 'local-asr-logs' / 'status.json'
+        ready = status.read_text()
+        data = json.loads(ready)
+        data['services']['nemo']['status'] = 'loading'
+        status.write_text(json.dumps(data))
+        answers = iter([False, False, False, False, True])
+
+        def probe():
+            answer = next(answers)
+            status.write_text(ready)
+            return answer
+        self.assertTrue(r.recover_speech(probe))
+        self.assertEqual(self.ended, [4242])
+
+    def test_a_status_file_being_replaced_is_tried_again(self):
+        r = self.make()
+        status = r.profile_dir() / 'local-asr-logs' / 'status.json'
+        good = status.read_text()
+        status.write_text('{not json')
+        answers = iter([False, False, False, True])
+
+        def probe():
+            answer = next(answers)
+            status.write_text(good)
+            return answer
+        self.assertTrue(r.recover_speech(probe))
+        self.assertEqual(self.ended, [4242])
+
+    def test_a_failed_end_does_not_start_the_cooldown(self):
+        r = self.make()
+        r.terminate = lambda pid: False
+        self.assertFalse(r.restart('nemo', 'test'))
+        self.assertEqual(self.logged[-1][1]['result'], 'failed')
+        r.terminate = lambda pid: self.ended.append(pid) or True
+        self.assertTrue(r.restart('nemo', 'test'))
+
     def test_gives_up_after_the_wait(self):
         r = self.make()
         self.assertFalse(r.recover_speech(lambda: False))
@@ -171,7 +221,8 @@ class DecodeTests(unittest.TestCase):
         self.assertTrue(asr.backend_failed(http_error(503)))
         self.assertTrue(asr.backend_failed(urllib.error.URLError('refused')))
         self.assertTrue(asr.backend_failed(ConnectionResetError()))
-        self.assertTrue(asr.backend_failed(TimeoutError()))
+        self.assertFalse(asr.backend_failed(TimeoutError()))  # maybe only slow
+        self.assertFalse(asr.backend_failed(urllib.error.URLError(TimeoutError())))
         self.assertFalse(asr.backend_failed(http_error(400)))
         self.assertFalse(asr.backend_failed(ValueError('bad reply')))
 
@@ -204,6 +255,11 @@ class DecodeTests(unittest.TestCase):
             asr.transcribe_with_retry(self.wav, 'm', None, None)
         self.assertEqual(asked, [])
 
+    def test_a_locked_temp_file_does_not_lose_the_result(self):
+        self.fake(['', 'Water the tomatoes.'])
+        with patch.object(asr.os, 'remove', side_effect=PermissionError()):
+            self.assertEqual(asr.transcribe_with_retry(self.wav, 'm', None, None), 'Water the tomatoes.')
+
     def test_no_hook_keeps_the_old_behaviour(self):
         self.fake([http_error(500)])
         asr.recover_backend = None
@@ -225,8 +281,12 @@ class CleanupModelTests(unittest.TestCase):
         self.assertEqual(info['engine'], 'rules')
         return restarts
 
-    def test_http_500_restarts_the_model(self):
-        self.assertEqual(self.run_with(http_error(500)), [('cleanup-llm', 'model-http-500')])
+    def test_device_lost_restarts_the_model(self):
+        lost = http_error(500, b'{"error":{"message":"decode() failed: vk::Queue::submit: ErrorDeviceLost"}}')
+        self.assertEqual(self.run_with(lost), [('cleanup-llm', 'device-lost')])
+
+    def test_another_server_error_does_not(self):
+        self.assertEqual(self.run_with(http_error(500, b'{"error":"bad template"}')), [])
 
     def test_busy_gpu_or_loading_model_does_not(self):
         self.assertEqual(self.run_with(TimeoutError()), [])
@@ -293,7 +353,7 @@ class EndToEndTest(unittest.TestCase):
 
             def write_status():
                 (tmp / 'local-asr-logs' / 'status.json').write_text(json.dumps(
-                    {'services': {'nemo': {'pid': state['child'].pid}}}))
+                    {'services': {'nemo': {'pid': state['child'].pid, 'status': 'ready'}}}))
 
             def launch():
                 state['child'] = subprocess.Popen(

@@ -14,6 +14,7 @@ and it is careful about what it ends:
   * only the PID the supervisor reports for that service (status.json);
   * only if that PID is running the executable configured for that service
     (local-asr-runtime.json), so another llama-server on this PC is never touched;
+  * only if the supervisor reports it as ready, not while it loads;
   * at most once per RESTART_COOLDOWN_S for each service.
 """
 from __future__ import annotations
@@ -82,19 +83,22 @@ class Restarter:
         self._last: dict[str, float] = {}
         self._lock = threading.Lock()
 
-    def _target(self, service: str) -> tuple[int, str] | None:
+    def _target(self, service: str) -> tuple[int, str, str] | None:
         profile = Path(self.profile_dir())
         try:
             status = json.loads((profile / 'local-asr-logs' / 'status.json').read_text(encoding='utf-8-sig'))
             runtime = json.loads((profile / 'local-asr-runtime.json').read_text(encoding='utf-8-sig'))
-            pid = status['services'][service]['pid']
+            state = status['services'][service]
+            pid = state['pid']
             exe = next(s['executable'] for s in runtime['services'] if s['name'] == service)
         except (OSError, ValueError, KeyError, TypeError, StopIteration):
             return None
-        return (pid, exe) if isinstance(pid, int) and isinstance(exe, str) else None
+        return (pid, exe, state.get('status')) if isinstance(pid, int) and isinstance(exe, str) else None
 
-    def restart(self, service: str, why: str) -> bool:
-        """End the service's process. True only if it was ended now."""
+    def restart(self, service: str, why: str, quiet: bool = False) -> bool:
+        """End the service's process. True only if it was ended now. A server
+        still loading refuses requests too, and ending it would only start the
+        load again, so only a server the supervisor reports as ready is ended."""
         with self._lock:
             now = self.clock()
             last = self._last.get(service)
@@ -102,15 +106,19 @@ class Restarter:
                 return False
             target = self._target(service)
             if target is None:
-                self.log('service-restart', service=service, why=why, result='no-target')
+                if not quiet:
+                    self.log('service-restart', service=service, why=why, result='no-target')
                 return False
-            pid, exe = target
+            pid, exe, state = target
+            if state != 'ready':
+                return False
             actual = self.image_path(pid)
             if not actual or os.path.normcase(actual) != os.path.normcase(exe):
                 self.log('service-restart', service=service, why=why, result='refused-not-the-service')
                 return False
-            self._last[service] = now
             ok = self.terminate(pid)
+            if ok:
+                self._last[service] = now
             self.log('service-restart', service=service, why=why, result='ended' if ok else 'failed')
             return ok
 
@@ -127,12 +135,14 @@ class Restarter:
         already being replaced) and this waits until the probe passes."""
         if probe():
             return True
-        self.restart('nemo', 'decode-failed')
+        ended = self.restart('nemo', 'decode-failed')
         deadline = self.clock() + READY_WAIT_S
         while self.clock() < deadline:
             self.sleep(READY_POLL_S)
             if probe():
                 self.log('service-recovered', service='nemo')
                 return True
+            # A status file being replaced, or a load that finished and still fails.
+            ended = ended or self.restart('nemo', 'decode-failed', quiet=True)
         self.log('service-not-recovered', service='nemo')
         return False

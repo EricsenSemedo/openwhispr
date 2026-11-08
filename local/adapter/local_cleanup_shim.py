@@ -255,11 +255,11 @@ def flow_cleanup(text, *, ctx, category, vocabulary, settings, use_rules=True):
         out, llm_info = flow_llm.clean_with_model(text, ctx=ctx, style=style, category=category,
                                                   vocabulary=vocabulary, hints=hints, cfg=cfg)
         info.update(llm_info)
-        if llm_info.get('fallbackStatus') == 500:
-            # llama-server answers 500 after the GPU device is lost, and it keeps
+        if llm_info.get('deviceLost'):
+            # llama-server answers this after the GPU device is lost, and it keeps
             # doing so. This dictation gets the rules text; the next one gets a
-            # fresh model. A time-out (a busy GPU) is not a reason to restart.
-            RESTARTER.restart_soon('cleanup-llm', 'model-http-500')
+            # fresh model. Any other error or a time-out (a busy GPU) is no reason.
+            RESTARTER.restart_soon('cleanup-llm', 'device-lost')
         if out:
             # The model may type pauses as "..." too.
             out = flow_text.drop_pause_ellipses(out, style, set(vocabulary))

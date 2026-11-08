@@ -270,7 +270,7 @@ def scratch_that(text: str) -> str:
 # 2026-11-08, 21 of 202 pasted dictations held one mid-text, 17 of them straight
 # from speech recognition.
 _AND_SENTENCE = re.compile(r"(?<=[^\W\d_]{2})\.[ \t]+And(?=[ \t]+\w)")
-_ABBREVIATION = re.compile(r"(?:^|[\s(])(?:\w\.)+\w$|(?:^|[\s(])(?:etc|vs|mr|mrs|ms|dr|st|inc|ltd|jr|sr)$", re.IGNORECASE)
+_ABBREVIATION = re.compile(r"(?:^|[\s(])(?:\w\.)+\w$|(?:^|[\s(])(?:etc|vs|mr|mrs|ms|dr|prof|st|ave|mt|inc|co|corp|ltd|jr|sr|dept|approx)$", re.IGNORECASE)
 
 
 def join_and_sentences(text: str) -> str:

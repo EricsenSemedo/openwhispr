@@ -197,11 +197,23 @@ recover_backend = None
 
 
 def backend_failed(exc: Exception) -> bool:
-    """The server itself failed: a 5xx, a refused or dropped connection, or a
-    time-out. A 4xx is about the request, and restarting would not help it."""
+    """The server itself failed: a 5xx, or a refused or dropped connection. A
+    4xx is about the request. A time-out may be a server that is only slow (a
+    busy GPU, a long clip), and restarting would lose its work."""
     if isinstance(exc, urllib.error.HTTPError):
         return exc.code >= 500
+    if isinstance(exc, TimeoutError) or isinstance(getattr(exc, "reason", None), TimeoutError):
+        return False
     return isinstance(exc, (urllib.error.URLError, OSError, http.client.HTTPException))
+
+
+def remove_temp(path: str) -> None:
+    """A virus scan or the indexer can hold a temp file for a moment. That must
+    not turn a good result into an error."""
+    try:
+        os.remove(path)
+    except OSError:
+        pass
 
 
 def probe_wav_bytes(seconds: float = 0.5, rate: int = 16000) -> bytes:
@@ -233,7 +245,7 @@ def backend_answers(model: str) -> bool:
     except (OSError, ValueError, http.client.HTTPException):
         return False
     finally:
-        os.remove(path)
+        remove_temp(path)
 
 
 def transcribe_recovering(wav_path: str, model: str, language: str | None, prompt: str | None) -> str:
@@ -257,7 +269,7 @@ def transcribe_with_retry(wav_path: str, model: str, language: str | None,
         try:
             retried = transcribe(copy, model, language, prompt)
         finally:
-            os.remove(copy)
+            remove_temp(copy)
         recovered = bool((retried or "").strip())
         print(json.dumps({"t": time.strftime("%H:%M:%S"), "event": "asr-retry", "kind": kind,
                           "recovered": recovered}), flush=True)

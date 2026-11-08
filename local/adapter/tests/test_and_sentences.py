@@ -40,6 +40,8 @@ class JoinTests(unittest.TestCase):
                      'Line one.\nAnd line two.',             # a new line was typed or said
                      'She said "we are done. And it works." today.',
                      'We met Dr. And then left.',            # abbreviations
+                     'We met the Prof. And then left.',
+                     'We called Acme Co. And then left.',
                      'Ask the U.S. And then Canada.',
                      'Fix the sidebar etc. And the footer.',
                      'We paid 5. And it works.',             # after a digit
