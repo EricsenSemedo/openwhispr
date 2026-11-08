@@ -5,7 +5,7 @@ const Module = require("node:module");
 const clipboardPath = require.resolve("../../src/helpers/clipboard");
 const originalLoad = Module._load;
 
-function setup({ enabled = true, wrote = true, platform = "win32" } = {}, t) {
+function setup({ enabled = true, wrote = true, platform = "win32", onWrite } = {}, t) {
   const fake = {
     text: "dictated text",
     writes: [],
@@ -31,6 +31,7 @@ function setup({ enabled = true, wrote = true, platform = "win32" } = {}, t) {
     writePrivateClipboard: async (text, rich) => {
       privateWrites.push([text, rich]);
       if (wrote) fake.text = text;
+      onWrite?.(fake);
       return wrote;
     },
   };
@@ -75,6 +76,19 @@ test("a rich copy goes back privately with its html and rtf", async (t) => {
 
 test("a failed private write falls back to the normal restore", async (t) => {
   const { manager, fake } = setup({ wrote: false }, t);
+  await restore(manager, { type: "text", data: "previous clipboard" });
+  assert.deepEqual(fake.writes, [["writeText", "previous clipboard"]]);
+});
+
+test("a copy made during a failed private write is not overwritten", async (t) => {
+  const { manager, fake } = setup({ wrote: false, onWrite: (f) => (f.text = "copied by the user") }, t);
+  await restore(manager, { type: "text", data: "previous clipboard" });
+  assert.deepEqual(fake.writes, []);
+  assert.equal(fake.text, "copied by the user");
+});
+
+test("a write that failed halfway and emptied the clipboard still restores", async (t) => {
+  const { manager, fake } = setup({ wrote: false, onWrite: (f) => (f.text = "") }, t);
   await restore(manager, { type: "text", data: "previous clipboard" });
   assert.deepEqual(fake.writes, [["writeText", "previous clipboard"]]);
 });
