@@ -942,7 +942,33 @@ class ClipboardManager {
       return;
     }
 
+    if (await this._restoreClipboardPrivately(original)) return;
     this._restoreClipboard(original);
+  }
+
+  // OpenWhisprLocal: the old clipboard was already in Win+V history, or was kept
+  // out of it on purpose (a password manager). A normal write would add it again,
+  // once per dictation, so it goes back the way the transcript went out. Images
+  // can't, and a failed write falls back to the normal restore.
+  async _restoreClipboardPrivately(original) {
+    if (process.platform !== "win32" || !flowAdapter.isEnabled()) return false;
+    let text, rich;
+    if (original.type === "text") {
+      text = original.data;
+      rich = {};
+    } else if (original.type === "formats" && !original.data.image) {
+      const { text: plain, html, rtf } = original.data;
+      text = plain;
+      rich = { ...(html && { html }), ...(rtf && { rtf }) };
+    }
+    if (!text) return false;
+    const wrote = await flowAdapter.writePrivateClipboard(text, rich);
+    if (!wrote) return false;
+    try {
+      return clipboard.readText() === text;
+    } catch {
+      return false;
+    }
   }
 
   // Reading the tag never requests the transcript itself, which would count as the

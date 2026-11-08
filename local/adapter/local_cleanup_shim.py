@@ -569,9 +569,10 @@ class LocalCleanupShim(asr.ShimHandler):
                     self._send_json(409, {'error': 'privateClipboard is off'})
                     return
                 import flow_clipboard
+                rich = {k: body[k] for k in ('html', 'rtf') if isinstance(body.get(k), str) and body[k]}
                 # The app waits 400 ms; a write after that could land after
                 # its own fallback write, so give up well before.
-                flow_clipboard.set_private_text(text, deadline=time.monotonic() + 0.25)
+                flow_clipboard.set_private_text(text, deadline=time.monotonic() + 0.25, **rich)
                 self._send_json(200, {'ok': True})
         except (ValueError, OSError) as exc:
             self._send_json(400, {'error': str(exc)})
