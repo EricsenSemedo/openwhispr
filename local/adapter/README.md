@@ -12,7 +12,8 @@ placeholder phone-link values.
 | `local_cleanup_shim.py` | Entry point: ASR proxy, cleanup endpoint, Flow endpoints, phone link |
 | `nemo_openwhispr_shim.py` | OpenAI-style `/audio/transcriptions` in front of nemo-speech (Parakeet) |
 | `cleanup_filter.py` | Filler rules |
-| `flow_*.py` | Context, style, learned pairs, cleanup model, clipboard, number/scratch rules |
+| `flow_*.py` | Context, style, learned pairs, cleanup model, clipboard, number/scratch/"And" rules |
+| `flow_recovery.py` | Restarts `nemo` or `cleanup-llm` after the GPU device is lost |
 
 Tests (Windows, Python 3.12, no network; the local model is never called):
 

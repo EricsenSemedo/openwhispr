@@ -17,7 +17,7 @@ import time
 import unittest
 import urllib.error
 import wave
-from io import BytesIO
+from io import BytesIO, StringIO
 from pathlib import Path
 from unittest.mock import patch
 
@@ -232,6 +232,25 @@ class CleanupModelTests(unittest.TestCase):
         self.assertEqual(self.run_with(TimeoutError()), [])
         self.assertEqual(self.run_with(http_error(503)), [])
         self.assertEqual(self.run_with(urllib.error.URLError('refused')), [])
+
+
+class QuietLogTests(unittest.TestCase):
+    def printed(self, exc):
+        server = shim.QuietServer.__new__(shim.QuietServer)
+        err = StringIO()
+        with patch('sys.stderr', err):
+            try:
+                raise exc
+            except Exception:
+                server.handle_error(None, ('127.0.0.1', 1))
+        return err.getvalue()
+
+    def test_a_client_hanging_up_prints_nothing(self):
+        for exc in (ConnectionAbortedError(10053, 'aborted'), ConnectionResetError(), BrokenPipeError(), TimeoutError()):
+            self.assertEqual(self.printed(exc), '')
+
+    def test_real_errors_still_print(self):
+        self.assertIn('KeyError', self.printed(KeyError('oops')))
 
 
 FAKE_NEMO = r'''

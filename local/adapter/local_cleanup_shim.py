@@ -699,7 +699,7 @@ def start_phone_link(settings):
     try:
         # A typo in the port must not stop the adapter (and PC dictation) from starting.
         port = int(link.get('port', 18766))
-        server = ThreadingHTTPServer(('127.0.0.1', port), PhoneLinkHandler)
+        server = QuietServer(('127.0.0.1', port), PhoneLinkHandler)
     except (OSError, ValueError, TypeError, OverflowError) as exc:
         log('phone-link-unavailable', error=str(exc))
         return
@@ -708,8 +708,21 @@ def start_phone_link(settings):
     log('phone-link', port=port)
 
 
+class QuietServer(ThreadingHTTPServer):
+    """A client that hangs up early is normal: a 1 s health probe gives up while
+    this waits on the speech server, and the app cancels requests. Python printed
+    a full traceback for each, about 4,600 of them in one stretch of about 29 hours,
+    which pushed adapter.log to 10 MB (its limit is 2 MB, checked only when a
+    JSON line is logged). Real errors still print."""
+
+    def handle_error(self, request, client_address):
+        if isinstance(sys.exc_info()[1], (ConnectionError, TimeoutError)):
+            return
+        super().handle_error(request, client_address)
+
+
 def main(port=18765):
-    server=ThreadingHTTPServer(('127.0.0.1',port),LocalCleanupShim)
+    server=QuietServer(('127.0.0.1',port),LocalCleanupShim)
     server.daemon_threads=True
     settings = options()
     start_phone_link(settings)
