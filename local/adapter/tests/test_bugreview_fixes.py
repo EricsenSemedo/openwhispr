@@ -241,6 +241,16 @@ class AsrRetryTests(unittest.TestCase):
         self.assertFalse(asr.is_silent(path))
         self.assertFalse(asr.is_silent(str(Path(self.dir.name) / 'missing.wav')))
 
+    def test_a_truncated_wav_never_raises_from_a_new_stage(self):
+        src = self.wav('cut.wav', tone(6000))
+        with open(src, 'r+b') as f:
+            f.truncate(os.path.getsize(src) - 1)  # an odd number of data bytes
+        self.assertFalse(asr.is_silent(src))
+        calls = []  # fake_transcribe() would itself fail to read this file
+        asr.transcribe = lambda path, model, language, prompt: calls.append(path) or ''
+        self.assertEqual(asr.transcribe_with_retry(src, 'm', None, None), '')
+        self.assertEqual(calls, [src])
+
     def test_text_is_never_retried(self):
         calls = self.fake_transcribe(['Hello there.'])
         self.assertEqual(asr.transcribe_with_retry(self.wav('s.wav', tone(6000)), 'm', None, None),

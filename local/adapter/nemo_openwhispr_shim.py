@@ -273,8 +273,8 @@ def is_silent(wav_path: str) -> bool:
             if params.sampwidth != 2 or params.comptype != "NONE":
                 return False
             samples = array.array("h", src.readframes(params.nframes))
-    except (OSError, EOFError, wave.Error):
-        return False
+    except (OSError, EOFError, ValueError, wave.Error):
+        return False  # let the speech server judge a clip this can't read
     return not samples or max(max(samples), -min(samples)) < SILENT_PEAK
 
 
@@ -287,7 +287,10 @@ def transcribe_with_retry(wav_path: str, model: str, language: str | None,
     if (text or "").strip():
         return text
     for kind, make_copy in (("tail", tail_padded_copy), ("gain", louder_copy)):
-        copy = make_copy(wav_path)
+        try:
+            copy = make_copy(wav_path)
+        except Exception:  # a retry must never turn "no text" into an error
+            return text
         if copy is None:
             return text
         try:
