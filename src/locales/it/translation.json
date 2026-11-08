@@ -2190,6 +2190,10 @@
         "versionPlaceholder": "—",
         "whatsNew": "Novità nella v{{version}}"
       },
+      "pasteLastHotkey": {
+        "title": "Tasto rapido per incollare l'ultima trascrizione",
+        "description": "Incolla di nuovo l'ultima dettatura al cursore se ha mancato la casella di testo"
+      },
       "translationHotkey": {
         "title": "Hotkey Traduzione",
         "description": "Detta in qualsiasi lingua: il testo incollato esce tradotto"

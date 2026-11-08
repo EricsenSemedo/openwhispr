@@ -2242,6 +2242,10 @@
         "versionPlaceholder": "—",
         "whatsNew": "Novedades en v{{version}}"
       },
+      "pasteLastHotkey": {
+        "title": "Atajo para pegar la última transcripción",
+        "description": "Vuelve a pegar tu último dictado en el cursor si no llegó al cuadro de texto"
+      },
       "translationHotkey": {
         "title": "Atajo de Traducción",
         "description": "Dicta en cualquier idioma: el texto pegado sale traducido"

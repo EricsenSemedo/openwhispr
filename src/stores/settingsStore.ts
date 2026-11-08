@@ -1339,6 +1339,8 @@ export interface SettingsState
   setVoiceAgentKey: (key: string) => Promise<HotkeyRegistrationResult>;
   translationKey: string;
   setTranslationKey: (key: string) => Promise<HotkeyRegistrationResult>;
+  pasteLastKey: string;
+  setPasteLastKey: (key: string) => Promise<HotkeyRegistrationResult>;
   setMeetingHotkeyLayoutMode: (mode: "side-panel" | "full-width") => void;
   setOnboardingUseCases: (useCases: string[]) => void;
   setOnboardingUseCaseNote: (note: string) => void;
@@ -1460,7 +1462,7 @@ function createNumberSetter(key: string) {
 // being persisted. Rolls back to the previous key if registration fails.
 // Resolves to false on failure so optimistic UIs (HotkeyListInput) can revert.
 function createRegisteredHotkeySetter(
-  key: "voiceAgentKey" | "translationKey",
+  key: "voiceAgentKey" | "translationKey" | "pasteLastKey",
   label: string,
   getRegisterFn: () => ((hotkey: string) => Promise<HotkeyRegistrationResult>) | undefined,
   fallbackSave?: (hotkey: string) => void
@@ -1746,6 +1748,7 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   meetingKey: readString("meetingKey", ""),
   voiceAgentKey: readString("voiceAgentKey", ""),
   translationKey: readString("translationKey", ""),
+  pasteLastKey: readString("pasteLastKey", ""),
   onboardingUseCases: readStringArray("onboardingUseCases", []),
   onboardingUseCaseNote: readString("onboardingUseCaseNote", ""),
   spokenLanguages: readStringArray("spokenLanguages", []),
@@ -2519,6 +2522,11 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
     "translationKey",
     "translation hotkey",
     () => window.electronAPI?.updateTranslationHotkey
+  ),
+  setPasteLastKey: createRegisteredHotkeySetter(
+    "pasteLastKey",
+    "paste-last hotkey",
+    () => window.electronAPI?.updatePasteLastHotkey
   ),
 
   setMeetingHotkeyLayoutMode: (mode: "side-panel" | "full-width") => {
@@ -3759,6 +3767,20 @@ export async function initializeSettings(): Promise<void> {
     } catch (err) {
       logger.warn(
         "Failed to sync translation hotkey on startup",
+        { error: (err as Error).message },
+        "settings"
+      );
+    }
+
+    // Sync paste-last hotkey from main process
+    try {
+      const envKey = await window.electronAPI.getPasteLastKey?.();
+      if (envKey && envKey !== state.pasteLastKey) {
+        createStringSetter("pasteLastKey")(envKey);
+      }
+    } catch (err) {
+      logger.warn(
+        "Failed to sync paste-last hotkey on startup",
         { error: (err as Error).message },
         "settings"
       );

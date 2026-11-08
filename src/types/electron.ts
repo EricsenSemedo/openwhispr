@@ -3100,6 +3100,8 @@ declare global {
       getVoiceAgentKey?: () => Promise<string>;
       updateTranslationHotkey?: (hotkey: string) => Promise<{ success: boolean; message?: string }>;
       getTranslationKey?: () => Promise<string>;
+      updatePasteLastHotkey?: (hotkey: string) => Promise<{ success: boolean; message?: string }>;
+      getPasteLastKey?: () => Promise<string>;
       createAgentConversation?: (
         title: string,
         noteId?: number | null,

@@ -1279,6 +1279,8 @@ export default function SettingsPage({
   const setVoiceAgentKey = useSettingsStore((s) => s.setVoiceAgentKey);
   const translationKey = useSettingsStore((s) => s.translationKey);
   const setTranslationKey = useSettingsStore((s) => s.setTranslationKey);
+  const pasteLastKey = useSettingsStore((s) => s.pasteLastKey);
+  const setPasteLastKey = useSettingsStore((s) => s.setPasteLastKey);
 
   const settingsPolicyState = usePolicySnapshot();
   const agentAllowedByPolicy = isAgentAllowed(settingsPolicyState);
@@ -1498,10 +1500,11 @@ export default function SettingsPage({
           "settingsPage.general.meetingHotkey.title": meetingKey,
           "settingsPage.general.voiceAgentHotkey.title": voiceAgentKey,
           "settingsPage.general.translationHotkey.title": translationKey,
+          "settingsPage.general.pasteLastHotkey.title": pasteLastKey,
         },
         t
       ),
-    [meetingKey, voiceAgentKey, translationKey, t]
+    [meetingKey, voiceAgentKey, translationKey, pasteLastKey, t]
   );
 
   const validateMeetingHotkey = useCallback(
@@ -1512,10 +1515,11 @@ export default function SettingsPage({
           "settingsPage.general.hotkey.title": dictationKey,
           "settingsPage.general.voiceAgentHotkey.title": voiceAgentKey,
           "settingsPage.general.translationHotkey.title": translationKey,
+          "settingsPage.general.pasteLastHotkey.title": pasteLastKey,
         },
         t
       ),
-    [dictationKey, voiceAgentKey, translationKey, t]
+    [dictationKey, voiceAgentKey, translationKey, pasteLastKey, t]
   );
 
   const validateVoiceAgentHotkey = useCallback(
@@ -1526,10 +1530,11 @@ export default function SettingsPage({
           "settingsPage.general.hotkey.title": dictationKey,
           "settingsPage.general.meetingHotkey.title": meetingKey,
           "settingsPage.general.translationHotkey.title": translationKey,
+          "settingsPage.general.pasteLastHotkey.title": pasteLastKey,
         },
         t
       ),
-    [dictationKey, meetingKey, translationKey, t]
+    [dictationKey, meetingKey, translationKey, pasteLastKey, t]
   );
 
   const validateTranslationHotkey = useCallback(
@@ -1540,10 +1545,26 @@ export default function SettingsPage({
           "settingsPage.general.hotkey.title": dictationKey,
           "settingsPage.general.meetingHotkey.title": meetingKey,
           "settingsPage.general.voiceAgentHotkey.title": voiceAgentKey,
+          "settingsPage.general.pasteLastHotkey.title": pasteLastKey,
         },
         t
       ),
-    [dictationKey, meetingKey, voiceAgentKey, t]
+    [dictationKey, meetingKey, voiceAgentKey, pasteLastKey, t]
+  );
+
+  const validatePasteLastHotkey = useCallback(
+    (hotkey: string) =>
+      validateHotkeyForSlot(
+        hotkey,
+        {
+          "settingsPage.general.hotkey.title": dictationKey,
+          "settingsPage.general.meetingHotkey.title": meetingKey,
+          "settingsPage.general.voiceAgentHotkey.title": voiceAgentKey,
+          "settingsPage.general.translationHotkey.title": translationKey,
+        },
+        t
+      ),
+    [dictationKey, meetingKey, voiceAgentKey, translationKey, t]
   );
 
   const {
@@ -4064,6 +4085,27 @@ EOF`,
                 </SettingsPanelRow>
               </SettingsPanel>
             </div>
+
+            {/* Paste Last Transcript Hotkey */}
+            {getCachedPlatform() === "win32" && (
+              <div>
+                <SectionHeader
+                  title={t("settingsPage.general.pasteLastHotkey.title")}
+                  description={t("settingsPage.general.pasteLastHotkey.description")}
+                />
+                <SettingsPanel>
+                  <SettingsPanelRow>
+                    <HotkeyListInput
+                      value={pasteLastKey}
+                      onChange={(list) => commitAgentHotkey(setPasteLastKey, list)}
+                      onClear={() => commitAgentHotkey(setPasteLastKey, "")}
+                      validate={validatePasteLastHotkey}
+                      disabled={isAgentHotkeyCommitting}
+                    />
+                  </SettingsPanelRow>
+                </SettingsPanel>
+              </div>
+            )}
 
             {/* Meeting Mode Hotkey */}
             <div>

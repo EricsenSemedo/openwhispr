@@ -1142,6 +1142,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getVoiceAgentKey: () => ipcRenderer.invoke("get-voice-agent-key"),
   updateTranslationHotkey: (hotkey) => ipcRenderer.invoke("update-translation-hotkey", hotkey),
   getTranslationKey: () => ipcRenderer.invoke("get-translation-key"),
+  updatePasteLastHotkey: (hotkey) => ipcRenderer.invoke("update-paste-last-hotkey", hotkey),
+  getPasteLastKey: () => ipcRenderer.invoke("get-paste-last-key"),
   onPreviewText: registerListener("preview-text", (callback) => (_event, text) => callback(text)),
   onPreviewAppend: registerListener(
     "preview-append",

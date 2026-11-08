@@ -2169,6 +2169,10 @@
         "versionPlaceholder": "—",
         "whatsNew": "Novidades na v{{version}}"
       },
+      "pasteLastHotkey": {
+        "title": "Atalho para colar a última transcrição",
+        "description": "Cola de novo o seu último ditado no cursor se ele não chegou à caixa de texto"
+      },
       "translationHotkey": {
         "title": "Atalho de Tradução",
         "description": "Dite em qualquer idioma: o texto colado sai traduzido"
