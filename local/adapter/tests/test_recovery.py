@@ -201,6 +201,47 @@ class RestartTests(unittest.TestCase):
         r.terminate = lambda pid: self.ended.append(pid) or True
         self.assertTrue(r.restart('nemo', 'test'))
 
+    def slow_probe(self, answers):
+        """Each probe with no answer takes its whole 10 s time-out."""
+        answers = iter(answers)
+
+        def probe():
+            answer = next(answers)
+            if answer is None:
+                self.clock.now += 10
+            return answer
+        return probe
+
+    def test_a_busy_server_is_left_alone(self):
+        r = self.make()
+        self.assertTrue(r.recover_speech(self.slow_probe([None, True])))
+        self.assertEqual(self.ended, [])
+        self.assertEqual(self.logged, [])  # no false "recovered"
+
+    def test_a_hung_server_is_replaced(self):
+        r = self.make()
+        self.assertTrue(r.recover_speech(self.slow_probe([None, None, False, True])))
+        self.assertEqual(self.ended, [4242])
+        self.assertEqual(self.logged[0][1]['why'], 'hung')
+        self.assertEqual(self.logged[-1][0], 'service-recovered')
+
+    def test_an_answer_resets_the_hung_clock(self):
+        r = self.make()
+        status = r.profile_dir() / 'local-asr-logs' / 'status.json'
+        data = json.loads(status.read_text())
+        data['services']['nemo']['status'] = 'loading'
+        status.write_text(json.dumps(data))
+        self.assertTrue(r.recover_speech(self.slow_probe([None, False, None, True])))
+        self.assertEqual(self.ended, [])
+
+    def test_a_server_that_never_answers_gives_up_within_a_bound(self):
+        r = self.make()
+        start = self.clock.now
+        self.assertFalse(r.recover_speech(self.slow_probe([None] * 50)))
+        self.assertEqual(self.ended, [4242])
+        self.assertEqual(self.logged[-1][0], 'service-not-recovered')
+        self.assertLess(self.clock.now - start, flow_recovery.HUNG_AFTER_S + flow_recovery.READY_WAIT_S + 15)
+
     def test_gives_up_after_the_wait(self):
         r = self.make()
         self.assertFalse(r.recover_speech(lambda: False))
@@ -302,14 +343,12 @@ class DecodeTests(unittest.TestCase):
         with patch.object(asr.urllib.request, 'build_opener', lambda *a: Opener()):
             return asr.backend_answers('m')
 
-    def test_a_slow_server_counts_as_answering_so_it_is_not_replaced(self):
-        self.assertTrue(self.probe_with(TimeoutError()))
-        self.assertTrue(self.probe_with(urllib.error.URLError(TimeoutError())))
-
-    def test_a_broken_server_does_not_count_as_answering(self):
-        self.assertFalse(self.probe_with(http_error(500)))
-        self.assertFalse(self.probe_with(urllib.error.URLError(ConnectionRefusedError())))
-        self.assertFalse(self.probe_with(ConnectionResetError()))
+    def test_the_probe_tells_slow_from_broken(self):
+        self.assertIsNone(self.probe_with(TimeoutError()))
+        self.assertIsNone(self.probe_with(urllib.error.URLError(TimeoutError())))
+        self.assertIs(self.probe_with(http_error(500)), False)
+        self.assertIs(self.probe_with(urllib.error.URLError(ConnectionRefusedError())), False)
+        self.assertIs(self.probe_with(ConnectionResetError()), False)
 
     def test_a_locked_temp_file_does_not_lose_the_result(self):
         self.fake(['', 'Water the tomatoes.'])

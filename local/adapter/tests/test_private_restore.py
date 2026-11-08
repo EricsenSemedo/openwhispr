@@ -5,6 +5,7 @@
 Never touches the real clipboard: the Windows calls are replaced by a fake.
 """
 import json
+import socket
 import sys
 import threading
 import time
@@ -91,6 +92,27 @@ class EndpointTests(unittest.TestCase):
     def test_a_large_rich_copy_is_accepted(self):
         html = '<p>garden</p>' * 20000  # 260 KB
         self.assertEqual(self.post({'text': 'garden', 'html': html})[1]['html'], html)
+
+    def test_the_write_deadline_counts_from_arrival(self):
+        # A body that is slow to arrive must not get a later deadline.
+        server = ThreadingHTTPServer(('127.0.0.1', 0), shim.LocalCleanupShim)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        port = server.server_address[1]
+        body = json.dumps({'text': 'garden'}).encode()
+        calls = []
+        head = (f'POST /v1/flow/clipboard HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n'
+                f'Content-Type: application/json\r\nContent-Length: {len(body)}\r\n\r\n').encode()
+        with patch.object(shim, 'options', lambda: {'privateClipboard': True}), \
+                patch.object(flow_clipboard, 'set_private_text', lambda t, **kw: calls.append((time.monotonic(), kw))):
+            with socket.create_connection(('127.0.0.1', port), timeout=5) as sock:
+                sock.sendall(head)
+                time.sleep(0.4)
+                sock.sendall(body)
+                self.assertIn(b'200', sock.recv(200))
+        called, kw = calls[0]
+        self.assertGreater(called, kw['deadline'])  # already past it, so the writer gives up
 
     def test_plain_call_and_bad_types(self):
         self.assertNotIn('html', self.post({'text': 'garden'})[1])

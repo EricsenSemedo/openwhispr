@@ -34,6 +34,7 @@ RESTART_COOLDOWN_S = 45.0
 READY_WAIT_S = 25.0
 READY_POLL_S = 0.5
 LOAD_GRACE_S = 120.0  # the speech and cleanup models load in about 11 s
+HUNG_AFTER_S = 20.0   # a whole 3-minute clip decodes in under 2 s
 
 
 def _image_path(pid: int) -> str | None:
@@ -166,22 +167,39 @@ class Restarter:
         threading.Thread(target=self.restart, args=(service, why), daemon=True).start()
 
     def recover_speech(self, probe) -> bool:
-        """After a failed decode. probe() decodes a tiny clip and returns
-        True when the server answers. True here means "decode again".
+        """After a failed decode. probe() decodes a tiny clip and returns True
+        (it answered), False (it refused or failed) or None (no answer in time).
+        True here means "decode again".
 
-        A server that answers the probe is healthy and the failure was about
-        that one clip, so it is left alone. Otherwise it is replaced (or it is
-        already being replaced) and this waits until the probe passes."""
-        if probe():
-            return True
-        ended = self.restart('nemo', 'decode-failed')
+        A server that answers is healthy and the failure was about that one clip,
+        so it is left alone. One that fails is replaced, or is already being
+        replaced. One that gives no answer may only be busy, so it gets
+        HUNG_AFTER_S before it counts as hung and is replaced too. This waits
+        until the probe passes."""
         deadline = self.clock() + READY_WAIT_S
-        while self.clock() < deadline:
-            self.sleep(READY_POLL_S)
-            if probe():
-                self.log('service-recovered', service='nemo')
+        ended = tried = False
+        silent_since = None
+        while True:
+            asked = self.clock()
+            answer = probe()
+            if answer is True:
+                if ended:
+                    self.log('service-recovered', service='nemo')
                 return True
-            # A status file being replaced, or a load that finished and still fails.
-            ended = ended or self.restart('nemo', 'decode-failed', quiet=True)
+            if answer is None:
+                silent_since = asked if silent_since is None else silent_since
+            else:
+                silent_since = None
+            hung = silent_since is not None and self.clock() - silent_since >= HUNG_AFTER_S
+            # Trying again covers a status file being replaced, and a load that
+            # finished and still fails.
+            if not ended and (answer is False or hung):
+                ended = self.restart('nemo', 'hung' if hung else 'decode-failed', quiet=tried)
+                tried = True
+                if ended:
+                    deadline = self.clock() + READY_WAIT_S
+            if self.clock() >= deadline:
+                break
+            self.sleep(READY_POLL_S)
         self.log('service-not-recovered', service='nemo')
         return False

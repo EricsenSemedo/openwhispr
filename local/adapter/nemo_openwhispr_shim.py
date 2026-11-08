@@ -236,8 +236,9 @@ def probe_wav_bytes(seconds: float = 0.5, rate: int = 16000) -> bytes:
     return buffer.getvalue()
 
 
-def backend_answers(model: str) -> bool:
-    """Decodes a tiny clip. An answer of any text means the server works."""
+def backend_answers(model: str) -> bool | None:
+    """Decodes a tiny clip. An answer of any text means the server works (True).
+    False: it refused or failed. None: no answer in time, so busy or hung."""
     fd, path = tempfile.mkstemp(suffix=".wav")
     try:
         with os.fdopen(fd, "wb") as out:
@@ -247,8 +248,7 @@ def backend_answers(model: str) -> bool:
         with opener.open(request, timeout=10) as response:
             return isinstance(json.load(response), dict)
     except (OSError, ValueError, http.client.HTTPException) as exc:
-        # A busy server is slow, not broken: a time-out must not get it replaced.
-        return timed_out(exc)
+        return None if timed_out(exc) else False
     finally:
         remove_temp(path)
 
