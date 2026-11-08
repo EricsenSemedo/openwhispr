@@ -85,6 +85,18 @@ class PipelineTests(unittest.TestCase):
         text, info = self.run_cleanup(reply='We shipped the build. And it works now.')
         self.assertEqual(info['engine'], 'llm')
         self.assertEqual(text, 'We shipped the build, and it works now.')
+        self.assertIn('and', info['fixes'])
+
+    def test_the_model_reads_the_text_unjoined(self):
+        # The model's choice of words must not change because of this rule.
+        s = {**self.SETTINGS, 'llmCleanup': {'enabled': True, 'baseUrl': 'http://127.0.0.1:1/v1', 'minWords': 1}}
+        with patch.object(flow_llm, 'call_model', return_value=self.TEXT) as model:
+            shim.flow_cleanup(self.TEXT, ctx=None, category='agent', vocabulary=[], settings=s)
+        self.assertIn(self.TEXT, model.call_args[0][3])
+
+    def test_off_also_leaves_the_model_output(self):
+        text, _ = self.run_cleanup({'joinAndSentences': False}, reply=self.TEXT)
+        self.assertEqual(text, self.TEXT)
 
 
 if __name__ == '__main__':

@@ -88,6 +88,10 @@ class EndpointTests(unittest.TestCase):
         self.assertEqual(text, 'garden')
         self.assertEqual((kw['html'], kw['rtf']), ('<b>garden</b>', '{\rtf1 garden}'))
 
+    def test_a_large_rich_copy_is_accepted(self):
+        html = '<p>garden</p>' * 20000  # 260 KB
+        self.assertEqual(self.post({'text': 'garden', 'html': html})[1]['html'], html)
+
     def test_plain_call_and_bad_types(self):
         self.assertNotIn('html', self.post({'text': 'garden'})[1])
         self.assertNotIn('html', self.post({'text': 'garden', 'html': 5})[1])

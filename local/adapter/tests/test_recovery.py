@@ -63,12 +63,13 @@ class Profile:
 
 class RestartTests(unittest.TestCase):
     def make(self, image=EXE, **kw):
-        self.ended, self.logged, self.clock = [], [], Clock()
+        self.ended, self.logged, self.clock, self.age = [], [], Clock(), 10.0
         profile = Profile(self, **kw)
         return flow_recovery.Restarter(lambda: profile.path, lambda e, **f: self.logged.append((e, f)),
                                        clock=self.clock, sleep=self.clock.sleep,
                                        image_path=lambda pid: image,
-                                       terminate=lambda pid: self.ended.append(pid) or True)
+                                       terminate=lambda pid: self.ended.append(pid) or True,
+                                       process_age=lambda pid: self.age)
 
     def test_ends_the_reported_process(self):
         self.assertTrue(self.make().restart('nemo', 'test'))
@@ -136,6 +137,32 @@ class RestartTests(unittest.TestCase):
         self.assertTrue(r.recover_speech(lambda: next(answers)))  # it waits instead
         self.assertEqual(self.ended, [])
 
+    def test_a_server_stuck_in_loading_far_too_long_is_ended(self):
+        # The supervisor writes "loading" whenever a health check fails.
+        r = self.make()
+        status = r.profile_dir() / 'local-asr-logs' / 'status.json'
+        data = json.loads(status.read_text())
+        data['services']['nemo']['status'] = 'loading'
+        status.write_text(json.dumps(data))
+        self.age = flow_recovery.LOAD_GRACE_S + 1
+        self.assertTrue(r.restart('nemo', 'test'))
+        self.assertEqual(self.ended, [4242])
+
+    def test_unknown_age_counts_as_still_loading(self):
+        r = self.make()
+        status = r.profile_dir() / 'local-asr-logs' / 'status.json'
+        data = json.loads(status.read_text())
+        data['services']['nemo']['status'] = 'loading'
+        status.write_text(json.dumps(data))
+        self.age = None
+        self.assertFalse(r.restart('nemo', 'test'))
+        self.assertEqual(self.ended, [])
+
+    def test_a_second_reset_soon_after_is_still_recovered(self):
+        # Longer than one failed dictation's whole wait, shorter than the old 2 minutes.
+        self.assertGreater(flow_recovery.RESTART_COOLDOWN_S, 10 + flow_recovery.READY_WAIT_S + 10 - 1)
+        self.assertLess(flow_recovery.RESTART_COOLDOWN_S, 60)
+
     def test_a_load_that_finishes_broken_is_ended_during_the_wait(self):
         r = self.make()
         status = r.profile_dir() / 'local-asr-logs' / 'status.json'
@@ -192,6 +219,19 @@ class RestartTests(unittest.TestCase):
         r = flow_recovery.Restarter(lambda: profile.path)
         self.assertTrue(r.restart('nemo', 'test'))
         self.assertEqual(child.wait(10), 1)
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows process API')
+    def test_real_process_age(self):
+        child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'],
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                 creationflags=subprocess.CREATE_NO_WINDOW)
+        self.addCleanup(child.wait, 10)
+        self.addCleanup(child.kill)
+        age = flow_recovery._process_age(child.pid)
+        self.assertIsNotNone(age)
+        self.assertGreaterEqual(age, 0)
+        self.assertLess(age, 30)
+        self.assertIsNone(flow_recovery._process_age(0x7FFFFFF0))
 
 
 class DecodeTests(unittest.TestCase):
@@ -254,6 +294,22 @@ class DecodeTests(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError):
             asr.transcribe_with_retry(self.wav, 'm', None, None)
         self.assertEqual(asked, [])
+
+    def probe_with(self, error):
+        class Opener:
+            def open(self, request, timeout=None):
+                raise error
+        with patch.object(asr.urllib.request, 'build_opener', lambda *a: Opener()):
+            return asr.backend_answers('m')
+
+    def test_a_slow_server_counts_as_answering_so_it_is_not_replaced(self):
+        self.assertTrue(self.probe_with(TimeoutError()))
+        self.assertTrue(self.probe_with(urllib.error.URLError(TimeoutError())))
+
+    def test_a_broken_server_does_not_count_as_answering(self):
+        self.assertFalse(self.probe_with(http_error(500)))
+        self.assertFalse(self.probe_with(urllib.error.URLError(ConnectionRefusedError())))
+        self.assertFalse(self.probe_with(ConnectionResetError()))
 
     def test_a_locked_temp_file_does_not_lose_the_result(self):
         self.fake(['', 'Water the tomatoes.'])

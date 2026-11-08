@@ -196,13 +196,17 @@ def tail_padded_copy(wav_path: str, seconds: float = RETRY_TAIL_SECONDS) -> str 
 recover_backend = None
 
 
+def timed_out(exc: Exception) -> bool:
+    return isinstance(exc, TimeoutError) or isinstance(getattr(exc, "reason", None), TimeoutError)
+
+
 def backend_failed(exc: Exception) -> bool:
     """The server itself failed: a 5xx, or a refused or dropped connection. A
     4xx is about the request. A time-out may be a server that is only slow (a
     busy GPU, a long clip), and restarting would lose its work."""
     if isinstance(exc, urllib.error.HTTPError):
         return exc.code >= 500
-    if isinstance(exc, TimeoutError) or isinstance(getattr(exc, "reason", None), TimeoutError):
+    if timed_out(exc):
         return False
     return isinstance(exc, (urllib.error.URLError, OSError, http.client.HTTPException))
 
@@ -242,8 +246,9 @@ def backend_answers(model: str) -> bool:
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         with opener.open(request, timeout=10) as response:
             return isinstance(json.load(response), dict)
-    except (OSError, ValueError, http.client.HTTPException):
-        return False
+    except (OSError, ValueError, http.client.HTTPException) as exc:
+        # A busy server is slow, not broken: a time-out must not get it replaced.
+        return timed_out(exc)
     finally:
         remove_temp(path)
 
@@ -391,7 +396,7 @@ class ShimHandler(BaseHTTPRequestHandler):
         finally:
             for path in (in_path, wav_path):
                 if path and os.path.exists(path):
-                    os.remove(path)
+                    remove_temp(path)
 
 
 def main() -> None:

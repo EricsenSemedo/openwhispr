@@ -61,6 +61,7 @@ OPTIONS = ROOT / 'profile' / 'local-dictation-options.json'
 MAX_OPTIONS_BYTES = 65536
 MAX_BODY_BYTES = 1024 * 1024
 MAX_FLOW_BODY_BYTES = 64 * 1024
+MAX_CLIPBOARD_BODY_BYTES = 4 * 1024 * 1024  # an old rich copy being put back can be large
 APP_ORIGIN = 'null'  # Electron file:// pages send 'Origin: null'
 MODEL = 'conservative-filler-filter-v1'
 APP_TRANSCRIPT_PREFIX = '<transcript>\n'
@@ -239,11 +240,6 @@ def flow_cleanup(text, *, ctx, category, vocabulary, settings, use_rules=True):
     before, text = text, flow_text.drop_pause_ellipses(text, style, set(vocabulary))
     if text != before:
         fixes.append('ellipsis')
-    join_and = settings.get('joinAndSentences', True) is True
-    if join_and:
-        before, text = text, flow_text.join_and_sentences(text)
-        if text != before:
-            fixes.append('and')
     if fixes:
         info['fixes'] = fixes
     cfg = llm_config(settings)
@@ -263,11 +259,15 @@ def flow_cleanup(text, *, ctx, category, vocabulary, settings, use_rules=True):
         if out:
             # The model may type pauses as "..." too.
             out = flow_text.drop_pause_ellipses(out, style, set(vocabulary))
-            if join_and:  # the agent prompt splits run-on speech into sentences
-                out = flow_text.join_and_sentences(out)
             text = flow_text.fix_vocabulary(out, vocabulary)
     elif cfg:
         info['skipped'] = 'short'
+    # After the model, so it reads the same punctuation as before this rule and
+    # its choice of words can't change. It also splits run-on speech itself.
+    if settings.get('joinAndSentences', True) is True:
+        before, text = text, flow_text.join_and_sentences(text)
+        if text != before:
+            info.setdefault('fixes', []).append('and')
     if settings.get('applyStyle') is True:
         text = flow_style.apply_style(text, style)
     info['totalMs'] = round((time.monotonic() - t0) * 1000)
@@ -545,7 +545,7 @@ class LocalCleanupShim(asr.ShimHandler):
             self._send_json(403, {'error': 'Flow endpoints are for the local app process only'})
             return
         try:
-            body = self._read_json(MAX_FLOW_BODY_BYTES)
+            body = self._read_json(MAX_CLIPBOARD_BODY_BYTES if path == '/v1/flow/clipboard' else MAX_FLOW_BODY_BYTES)
             if body is None:
                 return
             if not isinstance(body, dict):
