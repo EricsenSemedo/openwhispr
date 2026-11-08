@@ -239,6 +239,11 @@ def flow_cleanup(text, *, ctx, category, vocabulary, settings, use_rules=True):
     before, text = text, flow_text.drop_pause_ellipses(text, style, set(vocabulary))
     if text != before:
         fixes.append('ellipsis')
+    join_and = settings.get('joinAndSentences', True) is True
+    if join_and:
+        before, text = text, flow_text.join_and_sentences(text)
+        if text != before:
+            fixes.append('and')
     if fixes:
         info['fixes'] = fixes
     cfg = llm_config(settings)
@@ -258,6 +263,8 @@ def flow_cleanup(text, *, ctx, category, vocabulary, settings, use_rules=True):
         if out:
             # The model may type pauses as "..." too.
             out = flow_text.drop_pause_ellipses(out, style, set(vocabulary))
+            if join_and:  # the agent prompt splits run-on speech into sentences
+                out = flow_text.join_and_sentences(out)
             text = flow_text.fix_vocabulary(out, vocabulary)
     elif cfg:
         info['skipped'] = 'short'
