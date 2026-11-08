@@ -33,3 +33,8 @@ Logs: the supervisor writes the adapter's output to
 ISO 8601 time with its UTC offset. Above 2 MB the adapter copies the file to
 `adapter.log.1` (keeping 3 copies) and empties it in place; `cleanup-llm.log`
 belongs to llama-server and is not rotated by the adapter.
+
+`tests/compare_endpoints.py`, `tests/compare_js_reference.py` and
+`tests/history_parity.py` are manual helpers, not suites (`test_*.py`): they
+diff adapters, the JS reference and a copy of the history. `local/runtime/supervisor/`
+is the copy of the supervisor that runs from `%LOCALAPPDATA%\OpenWhisprLocal\runtime\supervisor\`.
