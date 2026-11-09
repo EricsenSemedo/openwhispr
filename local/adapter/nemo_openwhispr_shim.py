@@ -132,12 +132,16 @@ def transcribe(audio_path: str, model: str, language: str | None, prompt: str | 
 # mic) and very quiet clips are not retried, so noise never turns into words.
 #
 # Replay 2026-11-08: the gain retry recovered 0 of its 4 live tries, and 1 of
-# the 7 sounding clips in the whole history that decode empty. The same clip
-# with half a second of silence added at the end recovered 6 of the 7: these
-# are short dictations that end right at the last word, not quiet ones. So the
-# silence is tried first, then the gain. Only on an empty result: padding every
-# clip changed a third of the good transcripts with no gain.
+# the 7 sounding clips in the whole history that decode empty. Half a second of
+# silence added at the end gave text for 6 of the 7: these are short dictations
+# that end right at the last word, not quiet ones. But 2 of those 6 were unstable
+# (1 word from a 6 s clip; 3 words of which a longer padding kept 1), so a padded
+# result counts only if a second padding repeats it. Otherwise the clip stays "no
+# text", which is what it was before. The gain retry stays first, so whatever it
+# recovered still comes out the same. Only on an empty result: padding every clip
+# changed a third of the good transcripts with no gain.
 RETRY_TAIL_SECONDS = 0.5
+RETRY_CONFIRM_SECONDS = 1.0
 RETRY_GAIN_DB = 6.0
 RETRY_MIN_PEAK = 328         # about -40 dBFS on 16-bit samples
 RETRY_MAX_SECONDS = 60       # bounds the extra work on a long clip
@@ -283,6 +287,32 @@ def is_silent(wav_path: str) -> bool:
     return not samples or max(max(samples), -min(samples)) < SILENT_PEAK
 
 
+def decode_copy(make_copy, wav_path: str, model: str, language: str | None, prompt: str | None) -> str:
+    """Text of a changed copy of the clip, or "". A retry must never turn "no text"
+    into an error, so any failure here simply counts as no text."""
+    copy = None
+    try:
+        copy = make_copy(wav_path)
+        return (transcribe(copy, model, language, prompt) or "") if copy else ""
+    except Exception:
+        return ""
+    finally:
+        if copy:
+            remove_temp(copy)
+
+
+def same_words(first: str, second: str) -> bool:
+    """True when at least half of the first text's words are in the second."""
+    words = lambda text: set(re.findall(r"[\w'’]+", text.lower()))  # noqa: E731
+    a, b = words(first), words(second)
+    return bool(a) and len(a & b) * 2 >= len(a)
+
+
+def log_retry(kind: str, recovered: bool) -> None:
+    print(json.dumps({"t": time.strftime("%H:%M:%S"), "event": "asr-retry", "kind": kind,
+                      "recovered": recovered}), flush=True)
+
+
 def transcribe_with_retry(wav_path: str, model: str, language: str | None,
                           prompt: str | None) -> str:
     if is_silent(wav_path):
@@ -291,23 +321,18 @@ def transcribe_with_retry(wav_path: str, model: str, language: str | None,
     text = transcribe_recovering(wav_path, model, language, prompt)
     if (text or "").strip():
         return text
-    for kind, make_copy in (("tail", tail_padded_copy), ("gain", louder_copy)):
-        try:
-            copy = make_copy(wav_path)
-        except Exception:  # a retry must never turn "no text" into an error
-            return text
-        if copy is None:
-            return text
-        try:
-            retried = transcribe(copy, model, language, prompt)
-        finally:
-            remove_temp(copy)
-        recovered = bool((retried or "").strip())
-        print(json.dumps({"t": time.strftime("%H:%M:%S"), "event": "asr-retry", "kind": kind,
-                          "recovered": recovered}), flush=True)
-        if recovered:
-            return retried
-    return text
+    louder = decode_copy(louder_copy, wav_path, model, language, prompt)
+    log_retry("gain", bool(louder.strip()))
+    if louder.strip():
+        return louder
+    padded = decode_copy(tail_padded_copy, wav_path, model, language, prompt)
+    if not padded.strip():
+        log_retry("tail", False)
+        return text
+    again = decode_copy(lambda path: tail_padded_copy(path, RETRY_CONFIRM_SECONDS), wav_path, model, language, prompt)
+    confirmed = same_words(padded, again)
+    log_retry("tail", confirmed)
+    return padded if confirmed else text
 
 
 class ShimHandler(BaseHTTPRequestHandler):
