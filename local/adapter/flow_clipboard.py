@@ -65,9 +65,29 @@ def _global(data: bytes):
     return handle
 
 
-def set_private_text(text: str, attempts: int = 10, deadline: float | None = None) -> None:
-    """deadline (time.monotonic) - give up rather than write late."""
+def cf_html(fragment: str) -> bytes:
+    """The Windows "HTML Format" wrapper: a header with byte offsets, then the
+    fragment between the two marker comments."""
+    start, end = '<html><body><!--StartFragment-->', '<!--EndFragment--></body></html>'
+    header = 'Version:0.9\r\nStartHTML:{:010d}\r\nEndHTML:{:010d}\r\nStartFragment:{:010d}\r\nEndFragment:{:010d}\r\n'
+    head_len = len(header.format(0, 0, 0, 0).encode('ascii'))
+    body = fragment.encode('utf-8')
+    frag_start = head_len + len(start.encode('ascii'))
+    frag_end = frag_start + len(body)
+    total = frag_end + len(end.encode('ascii'))
+    return header.format(head_len, total, frag_start, frag_end).encode('ascii') + start.encode('ascii') + body \
+        + end.encode('ascii') + b'\0'
+
+
+def set_private_text(text: str, attempts: int = 10, deadline: float | None = None,
+                     html: str | None = None, rtf: str | None = None) -> None:
+    """deadline (time.monotonic) - give up rather than write late. html and rtf
+    restore a rich copy's other formats (an old clipboard being put back)."""
     payload = [(CF_UNICODETEXT, (text + '\0').encode('utf-16-le'))]
+    if html:
+        payload.append((_user32.RegisterClipboardFormatW('HTML Format'), cf_html(html)))
+    if rtf:
+        payload.append((_user32.RegisterClipboardFormatW('Rich Text Format'), rtf.encode('utf-8') + b'\0'))
     for name, data in (('ExcludeClipboardContentFromMonitorProcessing', b'\0\0\0\0'),
                        ('CanIncludeInClipboardHistory', b'\0\0\0\0'),
                        ('CanUploadToCloudClipboard', b'\0\0\0\0')):

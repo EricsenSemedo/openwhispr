@@ -42,6 +42,26 @@ test("adjustForCursor uses the adapter's text", async () => {
   );
 });
 
+test("writePrivateClipboard sends an old clipboard's rich formats", async () => {
+  const bodies = [];
+  await withServer(
+    (req, res) => {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        bodies.push(JSON.parse(body));
+        json(res, 200, { ok: true });
+      });
+    },
+    async (url) => {
+      const flow = load(url);
+      assert.equal(await flow.writePrivateClipboard("plain"), true);
+      assert.equal(await flow.writePrivateClipboard("plain", { html: "<b>plain</b>" }), true);
+    }
+  );
+  assert.deepEqual(bodies, [{ text: "plain" }, { text: "plain", html: "<b>plain</b>" }]);
+});
+
 test("stock behaviour when the adapter is down, slow or wrong", async () => {
   const down = load("http://127.0.0.1:9");
   assert.equal(await down.adjustForCursor("Hi", null), "Hi");

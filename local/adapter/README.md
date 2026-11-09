@@ -12,7 +12,8 @@ placeholder phone-link values.
 | `local_cleanup_shim.py` | Entry point: ASR proxy, cleanup endpoint, Flow endpoints, phone link |
 | `nemo_openwhispr_shim.py` | OpenAI-style `/audio/transcriptions` in front of nemo-speech (Parakeet) |
 | `cleanup_filter.py` | Filler rules |
-| `flow_*.py` | Context, style, learned pairs, cleanup model, clipboard, number/scratch rules |
+| `flow_*.py` | Context, style, learned pairs, cleanup model, clipboard, number/scratch/"And" rules |
+| `flow_recovery.py` | Restarts `nemo` or `cleanup-llm` after the GPU device is lost |
 
 Tests (Windows, Python 3.12, no network; the local model is never called):
 
@@ -33,3 +34,8 @@ Logs: the supervisor writes the adapter's output to
 ISO 8601 time with its UTC offset. Above 2 MB the adapter copies the file to
 `adapter.log.1` (keeping 3 copies) and empties it in place; `cleanup-llm.log`
 belongs to llama-server and is not rotated by the adapter.
+
+`tests/compare_endpoints.py`, `tests/compare_js_reference.py` and
+`tests/history_parity.py` are manual helpers, not suites (`test_*.py`): they
+diff adapters, the JS reference and a copy of the history. `local/runtime/supervisor/`
+is the copy of the supervisor that runs from `%LOCALAPPDATA%\OpenWhisprLocal\runtime\supervisor\`.

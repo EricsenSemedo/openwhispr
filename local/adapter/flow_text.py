@@ -11,6 +11,8 @@ vocabulary) after the local model:
   * scratch_that()      - "Blue walls. Oh, scratch that." deletes "Blue walls.".
   * drop_pause_ellipses() - "I was thinking... Maybe we" -> "I was thinking maybe
                           we" (2026-10-23; also applied to the model's output).
+  * join_and_sentences() - "We shipped it. And it works." -> "We shipped it, and it
+                          works." (2026-11-08; also applied to the model's output).
 """
 from __future__ import annotations
 
@@ -259,6 +261,35 @@ def scratch_that(text: str) -> str:
             break
         text = result
     return text
+
+
+# --------------------------------------------------------------- "... . And"
+
+# The speech model ends a sentence wherever the speaker takes a breath, so "and"
+# often arrives as a new sentence: "We shipped the build. And it works." On
+# 2026-11-08, 21 of 202 pasted dictations held one mid-text, 17 of them straight
+# from speech recognition.
+_AND_SENTENCE = re.compile(r"(?<=[^\W\d_]{2})\.[ \t]+And(?=[ \t]+\w)")
+_ABBREVIATION = re.compile(r"(?:^|[\s(])(?:\w\.)+\w$|(?:^|[\s(])(?:etc|vs|mr|mrs|ms|dr|prof|st|ave|mt|inc|co|corp|ltd|jr|sr|dept|approx)$", re.IGNORECASE)
+
+
+def join_and_sentences(text: str) -> str:
+    """"We shipped the build. And it works." -> "We shipped the build, and it
+    works." Only a period right after a word of 2+ letters, on the same line, and
+    not after an abbreviation. "?" and "!" stay. A quoted span and a dictation
+    that starts with "And" stay. This function changes punctuation and case only."""
+    if not text or '. And' not in text:
+        return text
+    quoted = [m.span() for m in _QUOTED.finditer(text)]
+    out, pos = [], 0
+    for m in _AND_SENTENCE.finditer(text):
+        if any(a <= m.start() < b for a, b in quoted) or _ABBREVIATION.search(text[:m.start()]):
+            continue
+        out.append(text[pos:m.start()])
+        out.append(', and')
+        pos = m.end()
+    out.append(text[pos:])
+    return ''.join(out)
 
 
 # ------------------------------------------------------------ pause ellipses

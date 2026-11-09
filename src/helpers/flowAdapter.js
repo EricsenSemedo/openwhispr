@@ -90,8 +90,9 @@ async function adjustForCursor(text, targetWindow) {
 
 // Text on the clipboard with ExcludeClipboardContentFromMonitorProcessing,
 // CanIncludeInClipboardHistory=0 and CanUploadToCloudClipboard=0.
-async function writePrivateClipboard(text) {
-  const result = await flowRequest("POST", "/v1/flow/clipboard", { text }, 400);
+// `rich` is an old clipboard's other formats ({ html, rtf }) when it is put back.
+async function writePrivateClipboard(text, rich = {}) {
+  const result = await flowRequest("POST", "/v1/flow/clipboard", { text, ...rich }, 400);
   return result?.ok === true;
 }
 

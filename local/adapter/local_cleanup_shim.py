@@ -45,6 +45,7 @@ from cleanup_filter import clean_text
 import flow_context
 import flow_learn
 import flow_llm
+import flow_recovery
 import flow_style
 import flow_text
 
@@ -60,6 +61,7 @@ OPTIONS = ROOT / 'profile' / 'local-dictation-options.json'
 MAX_OPTIONS_BYTES = 65536
 MAX_BODY_BYTES = 1024 * 1024
 MAX_FLOW_BODY_BYTES = 64 * 1024
+MAX_CLIPBOARD_BODY_BYTES = 4 * 1024 * 1024  # an old rich copy being put back can be large
 APP_ORIGIN = 'null'  # Electron file:// pages send 'Origin: null'
 MODEL = 'conservative-filler-filter-v1'
 APP_TRANSCRIPT_PREFIX = '<transcript>\n'
@@ -119,6 +121,10 @@ def rotate_own_log(path: Path | None = None) -> bool:
         return True
     except (OSError, ValueError, AttributeError):
         return False  # logging must never break a dictation
+
+
+RESTARTER = flow_recovery.Restarter(lambda: profile_dir(), log)
+asr.recover_backend = RESTARTER.recover_speech
 
 
 def options():
@@ -245,12 +251,23 @@ def flow_cleanup(text, *, ctx, category, vocabulary, settings, use_rules=True):
         out, llm_info = flow_llm.clean_with_model(text, ctx=ctx, style=style, category=category,
                                                   vocabulary=vocabulary, hints=hints, cfg=cfg)
         info.update(llm_info)
+        if llm_info.get('deviceLost'):
+            # llama-server answers this after the GPU device is lost, and it keeps
+            # doing so. This dictation gets the rules text; the next one gets a
+            # fresh model. Any other error or a time-out (a busy GPU) is no reason.
+            RESTARTER.restart_soon('cleanup-llm', 'device-lost')
         if out:
             # The model may type pauses as "..." too.
             out = flow_text.drop_pause_ellipses(out, style, set(vocabulary))
             text = flow_text.fix_vocabulary(out, vocabulary)
     elif cfg:
         info['skipped'] = 'short'
+    # After the model, so it reads the same punctuation as before this rule and
+    # its choice of words can't change. It also splits run-on speech itself.
+    if settings.get('joinAndSentences', True) is True:
+        before, text = text, flow_text.join_and_sentences(text)
+        if text != before:
+            info.setdefault('fixes', []).append('and')
     if settings.get('applyStyle') is True:
         text = flow_style.apply_style(text, style)
     info['totalMs'] = round((time.monotonic() - t0) * 1000)
@@ -522,13 +539,14 @@ class LocalCleanupShim(asr.ShimHandler):
             self._send_json(400,{'error':str(exc)})
 
     def _flow_post(self, path):
+        arrived = time.monotonic()
         # Browsers always send Origin on these requests; the app's main
         # process (Node) never does. Web pages therefore can't reach them.
         if self.headers.get('Origin') is not None:
             self._send_json(403, {'error': 'Flow endpoints are for the local app process only'})
             return
         try:
-            body = self._read_json(MAX_FLOW_BODY_BYTES)
+            body = self._read_json(MAX_CLIPBOARD_BODY_BYTES if path == '/v1/flow/clipboard' else MAX_FLOW_BODY_BYTES)
             if body is None:
                 return
             if not isinstance(body, dict):
@@ -559,9 +577,11 @@ class LocalCleanupShim(asr.ShimHandler):
                     self._send_json(409, {'error': 'privateClipboard is off'})
                     return
                 import flow_clipboard
+                rich = {k: body[k] for k in ('html', 'rtf') if isinstance(body.get(k), str) and body[k]}
                 # The app waits 400 ms; a write after that could land after
-                # its own fallback write, so give up well before.
-                flow_clipboard.set_private_text(text, deadline=time.monotonic() + 0.25)
+                # its own fallback write, so give up well before. Counted from
+                # arrival, because a large body takes time to read.
+                flow_clipboard.set_private_text(text, deadline=arrived + 0.25, **rich)
                 self._send_json(200, {'ok': True})
         except (ValueError, OSError) as exc:
             self._send_json(400, {'error': str(exc)})
@@ -681,7 +701,7 @@ def start_phone_link(settings):
     try:
         # A typo in the port must not stop the adapter (and PC dictation) from starting.
         port = int(link.get('port', 18766))
-        server = ThreadingHTTPServer(('127.0.0.1', port), PhoneLinkHandler)
+        server = QuietServer(('127.0.0.1', port), PhoneLinkHandler)
     except (OSError, ValueError, TypeError, OverflowError) as exc:
         log('phone-link-unavailable', error=str(exc))
         return
@@ -690,8 +710,21 @@ def start_phone_link(settings):
     log('phone-link', port=port)
 
 
+class QuietServer(ThreadingHTTPServer):
+    """A client that hangs up early is normal: a 1 s health probe gives up while
+    this waits on the speech server, and the app cancels requests. Python printed
+    a full traceback for each, about 4,600 of them in one stretch of about 29 hours,
+    which pushed adapter.log to 10 MB (its limit is 2 MB, checked only when a
+    JSON line is logged). Real errors still print."""
+
+    def handle_error(self, request, client_address):
+        if isinstance(sys.exc_info()[1], (ConnectionError, TimeoutError)):
+            return
+        super().handle_error(request, client_address)
+
+
 def main(port=18765):
-    server=ThreadingHTTPServer(('127.0.0.1',port),LocalCleanupShim)
+    server=QuietServer(('127.0.0.1',port),LocalCleanupShim)
     server.daemon_threads=True
     settings = options()
     start_phone_link(settings)

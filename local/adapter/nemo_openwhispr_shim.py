@@ -20,12 +20,14 @@ backend's call and everything else works as-is. See README.md for details.
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import re
 import subprocess
 import tempfile
 import time
+import urllib.error
 import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -128,6 +130,18 @@ def transcribe(audio_path: str, model: str, language: str | None, prompt: str | 
 # 3 and was transcribed correctly at +6 dB). An empty result for a clip that
 # has sound is retried once, 6 dB louder. Digital silence (a gated or muted
 # mic) and very quiet clips are not retried, so noise never turns into words.
+#
+# Replay 2026-11-08: the gain retry recovered 0 of its 4 live tries, and 1 of
+# the 7 sounding clips in the whole history that decode empty. Half a second of
+# silence added at the end gave text for 6 of the 7: these are short dictations
+# that end right at the last word, not quiet ones. But 2 of those 6 were unstable
+# (1 word from a 6 s clip; 3 words of which a longer padding kept 1), so a padded
+# result counts only if a second padding repeats it. Otherwise the clip stays "no
+# text", which is what it was before. The gain retry stays first, so whatever it
+# recovered still comes out the same. Only on an empty result: padding every clip
+# changed a third of the good transcripts with no gain.
+RETRY_TAIL_SECONDS = 0.5
+RETRY_CONFIRM_SECONDS = 1.0
 RETRY_GAIN_DB = 6.0
 RETRY_MIN_PEAK = 328         # about -40 dBFS on 16-bit samples
 RETRY_MAX_SECONDS = 60       # bounds the extra work on a long clip
@@ -158,21 +172,167 @@ def louder_copy(wav_path: str, gain_db: float = RETRY_GAIN_DB) -> str | None:
     return out_path
 
 
+def tail_padded_copy(wav_path: str, seconds: float = RETRY_TAIL_SECONDS) -> str | None:
+    """A temp WAV with `seconds` of silence added at the end, or None under the
+    same conditions as louder_copy(). The caller removes the returned file."""
+    import array
+    import wave
+    with wave.open(wav_path, "rb") as src:
+        params = src.getparams()
+        if params.sampwidth != 2 or params.nchannels != 1 or params.comptype != "NONE":
+            return None
+        if params.nframes > RETRY_MAX_SECONDS * params.framerate:
+            return None
+        frames = src.readframes(params.nframes)
+    samples = array.array("h", frames)
+    if not samples or max(max(samples), -min(samples)) < RETRY_MIN_PEAK:
+        return None
+    fd, out_path = tempfile.mkstemp(suffix=".wav")
+    os.close(fd)
+    with wave.open(out_path, "wb") as dst:
+        dst.setparams(params)
+        dst.writeframes(frames + b"\0\0" * int(seconds * params.framerate))
+    return out_path
+
+
+# Set by the adapter (flow_recovery): called with a probe after a decode failed
+# because of the server. Returns True when decoding again is worth trying.
+recover_backend = None
+
+
+def timed_out(exc: Exception) -> bool:
+    return isinstance(exc, TimeoutError) or isinstance(getattr(exc, "reason", None), TimeoutError)
+
+
+def backend_failed(exc: Exception) -> bool:
+    """The server itself failed: a 5xx, or a refused or dropped connection. A
+    4xx is about the request. A time-out may be a server that is only slow (a
+    busy GPU, a long clip), and restarting would lose its work."""
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code >= 500
+    if timed_out(exc):
+        return False
+    return isinstance(exc, (urllib.error.URLError, OSError, http.client.HTTPException))
+
+
+def remove_temp(path: str) -> None:
+    """A virus scan or the indexer can hold a temp file for a moment. That must
+    not turn a good result into an error."""
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
+def probe_wav_bytes(seconds: float = 0.5, rate: int = 16000) -> bytes:
+    """A low tone, not silence: the server must really run the model to answer."""
+    import array
+    import io
+    import math
+    import wave
+    samples = array.array("h", (round(1500 * math.sin(2 * math.pi * 220 * i / rate)) for i in range(int(seconds * rate))))
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as out:
+        out.setnchannels(1)
+        out.setsampwidth(2)
+        out.setframerate(rate)
+        out.writeframes(samples.tobytes())
+    return buffer.getvalue()
+
+
+def backend_answers(model: str) -> bool | None:
+    """Decodes a tiny clip. An answer of any text means the server works (True).
+    False: it refused or failed. None: no answer in time, so busy or hung."""
+    fd, path = tempfile.mkstemp(suffix=".wav")
+    try:
+        with os.fdopen(fd, "wb") as out:
+            out.write(probe_wav_bytes())
+        request = build_nemo_request(path, model, None, None)
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(request, timeout=10) as response:
+            return isinstance(json.load(response), dict)
+    except (OSError, ValueError, http.client.HTTPException) as exc:
+        return None if timed_out(exc) else False
+    finally:
+        remove_temp(path)
+
+
+def transcribe_recovering(wav_path: str, model: str, language: str | None, prompt: str | None) -> str:
+    try:
+        return transcribe(wav_path, model, language, prompt)
+    except Exception as exc:
+        if not backend_failed(exc) or recover_backend is None or not recover_backend(lambda: backend_answers(model)):
+            raise
+    return transcribe(wav_path, model, language, prompt)
+
+
+# A gated or muted mic records exact zeros, and the model can still "hear" words
+# in that: one clip with a peak of 0 pasted 2 words (replay 2026-11-08, all 502
+# recordings: 16 clips peak under 50, and the quietest clip with 3+ words peaks at
+# 2,579). Nothing was said, so such a clip is not decoded at all.
+SILENT_PEAK = 50
+
+
+def is_silent(wav_path: str) -> bool:
+    import array
+    import wave
+    try:
+        with wave.open(wav_path, "rb") as src:
+            params = src.getparams()
+            if params.sampwidth != 2 or params.comptype != "NONE":
+                return False
+            samples = array.array("h", src.readframes(params.nframes))
+    except (OSError, EOFError, ValueError, wave.Error):
+        return False  # let the speech server judge a clip this can't read
+    return not samples or max(max(samples), -min(samples)) < SILENT_PEAK
+
+
+def decode_copy(make_copy, wav_path: str, model: str, language: str | None, prompt: str | None) -> str:
+    """Text of a changed copy of the clip, or "". A retry must never turn "no text"
+    into an error, so any failure here simply counts as no text."""
+    copy = None
+    try:
+        copy = make_copy(wav_path)
+        return (transcribe(copy, model, language, prompt) or "") if copy else ""
+    except Exception:
+        return ""
+    finally:
+        if copy:
+            remove_temp(copy)
+
+
+def same_words(first: str, second: str) -> bool:
+    """True when at least half of the first text's words are in the second."""
+    words = lambda text: set(re.findall(r"[\w'’]+", text.lower()))  # noqa: E731
+    a, b = words(first), words(second)
+    return bool(a) and len(a & b) * 2 >= len(a)
+
+
+def log_retry(kind: str, recovered: bool) -> None:
+    print(json.dumps({"t": time.strftime("%H:%M:%S"), "event": "asr-retry", "kind": kind,
+                      "recovered": recovered}), flush=True)
+
+
 def transcribe_with_retry(wav_path: str, model: str, language: str | None,
                           prompt: str | None) -> str:
-    text = transcribe(wav_path, model, language, prompt)
+    if is_silent(wav_path):
+        print(json.dumps({"t": time.strftime("%H:%M:%S"), "event": "asr-skip-silence"}), flush=True)
+        return ""
+    text = transcribe_recovering(wav_path, model, language, prompt)
     if (text or "").strip():
         return text
-    louder = louder_copy(wav_path)
-    if louder is None:
+    louder = decode_copy(louder_copy, wav_path, model, language, prompt)
+    log_retry("gain", bool(louder.strip()))
+    if louder.strip():
+        return louder
+    padded = decode_copy(tail_padded_copy, wav_path, model, language, prompt)
+    if not padded.strip():
+        log_retry("tail", False)
         return text
-    try:
-        retried = transcribe(louder, model, language, prompt)
-    finally:
-        os.remove(louder)
-    print(json.dumps({"t": time.strftime("%H:%M:%S"), "event": "asr-retry", "gain_db": RETRY_GAIN_DB,
-                      "recovered": bool((retried or "").strip())}), flush=True)
-    return retried if (retried or "").strip() else text
+    again = decode_copy(lambda path: tail_padded_copy(path, RETRY_CONFIRM_SECONDS), wav_path, model, language, prompt)
+    confirmed = same_words(padded, again)
+    log_retry("tail", confirmed)
+    return padded if confirmed else text
 
 
 class ShimHandler(BaseHTTPRequestHandler):
@@ -261,7 +421,7 @@ class ShimHandler(BaseHTTPRequestHandler):
         finally:
             for path in (in_path, wav_path):
                 if path and os.path.exists(path):
-                    os.remove(path)
+                    remove_temp(path)
 
 
 def main() -> None:
