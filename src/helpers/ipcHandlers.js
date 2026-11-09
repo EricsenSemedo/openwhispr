@@ -13045,6 +13045,39 @@ class IPCHandlers {
       return this.environmentManager.getTranslationKey?.() || "";
     });
 
+    ipcMain.handle("update-paste-last-hotkey", async (_event, hotkey) => {
+      const hotkeyManager = this.windowManager.hotkeyManager;
+      const pasteLastCallback = this.windowManager._pasteLastHotkeyCallback;
+      if (!pasteLastCallback) {
+        return { success: false };
+      }
+
+      if (!hotkey) {
+        const removed = await hotkeyManager.unregisterSlot("pasteLast");
+        if (removed === false) return { success: false };
+        this.environmentManager.savePasteLastKey?.("");
+        this.windowManager.reconcileNativeKeyListeners();
+        this._notifyHotkeyChanged("");
+        return { success: true, message: "Paste-last hotkey cleared" };
+      }
+
+      const result = await hotkeyManager.registerSlot("pasteLast", hotkey, pasteLastCallback, {
+        atomic: true,
+      });
+      this.windowManager.reconcileNativeKeyListeners();
+      if (result.success) {
+        this.environmentManager.savePasteLastKey?.(hotkey);
+        this._notifyHotkeyChanged(hotkey);
+        return { success: true, message: `Paste-last hotkey updated to: ${hotkey}` };
+      }
+
+      return { success: false, message: result.error };
+    });
+
+    ipcMain.handle("get-paste-last-key", async () => {
+      return this.environmentManager.getPasteLastKey?.() || "";
+    });
+
     ipcMain.handle("acquire-recording-lock", async (_event, pipeline) => {
       if (this._activeRecordingPipeline && this._activeRecordingPipeline !== pipeline) {
         return { success: false, holder: this._activeRecordingPipeline };

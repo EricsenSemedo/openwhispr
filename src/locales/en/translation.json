@@ -2485,6 +2485,10 @@
         "versionPlaceholder": "—",
         "whatsNew": "What's new in v{{version}}"
       },
+      "pasteLastHotkey": {
+        "title": "Paste Last Transcript Hotkey",
+        "description": "Paste your most recent dictation at the cursor again, for when it missed the text box"
+      },
       "translationHotkey": {
         "title": "Translation Hotkey",
         "description": "Dictate in any language — the pasted text comes out translated"

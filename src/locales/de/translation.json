@@ -2485,6 +2485,10 @@
         "versionPlaceholder": "—",
         "whatsNew": "Neu in v{{version}}"
       },
+      "pasteLastHotkey": {
+        "title": "Hotkey für letztes Transkript",
+        "description": "Fügt dein letztes Diktat erneut am Cursor ein, falls es das Textfeld verfehlt hat"
+      },
       "translationHotkey": {
         "title": "Übersetzungs-Hotkey",
         "description": "Diktiere in beliebiger Sprache — der eingefügte Text kommt übersetzt heraus"

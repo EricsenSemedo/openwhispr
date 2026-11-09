@@ -2,6 +2,7 @@
 // late — the flag has to come from a relaunch.
 const { XWAYLAND_FLAG, shouldForceXWayland } = require("./src/helpers/xwayland");
 const { createHotkeyRepeatGate } = require("./src/helpers/hotkeyRepeatGate");
+const { pasteLastTranscript } = require("./src/helpers/pasteLastTranscript");
 const { shouldDisableGpuCompositing } = require("./src/helpers/linuxGpuCompositing");
 
 if (shouldForceXWayland(process.argv)) {
@@ -1389,6 +1390,36 @@ async function startApp() {
     hotkeyManager.notifyRestoreFailures(savedTranslationKey, result);
   }
 
+  // Set up paste-last hotkey (pastes the newest finished dictation at the cursor
+  // again, for when the first paste missed the text box)
+  const isPasteLastPress = createHotkeyRepeatGate();
+  const pasteLastHotkeyCallback = () => {
+    if (!isPasteLastPress()) return;
+    pasteLastTranscript({ databaseManager, clipboardManager, logger: debugLogger }).catch(
+      (error) => {
+        debugLogger.warn("Paste last transcript failed", { error: error.message }, "hotkey");
+      }
+    );
+  };
+  windowManager._pasteLastHotkeyCallback = pasteLastHotkeyCallback;
+
+  const savedPasteLastKey = environmentManager.getPasteLastKey?.() || "";
+  if (savedPasteLastKey) {
+    const result = await hotkeyManager.registerSlot(
+      "pasteLast",
+      savedPasteLastKey,
+      pasteLastHotkeyCallback
+    );
+    if (!result.success) {
+      debugLogger.warn(
+        "Failed to restore paste-last hotkey",
+        { hotkey: savedPasteLastKey },
+        "hotkey"
+      );
+    }
+    hotkeyManager.notifyRestoreFailures(savedPasteLastKey, result);
+  }
+
   // Set up meeting mode hotkey
   const isMeetingPress = createHotkeyRepeatGate();
   const meetingHotkeyCallback = () => {
@@ -1942,6 +1973,8 @@ async function startApp() {
         windowManager.sendToggleTranslation();
       } else if (hotkeyManager.slotHasHotkey("meeting", key)) {
         windowManager.startManualMeeting({ activate: false });
+      } else if (hotkeyManager.slotHasHotkey("pasteLast", key)) {
+        windowManager._pasteLastHotkeyCallback?.();
       }
     };
 

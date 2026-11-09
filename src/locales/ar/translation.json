@@ -4333,6 +4333,10 @@
         "versionPlaceholder": "—",
         "whatsNew": "ما الجديد في v{{version}}"
       },
+      "pasteLastHotkey": {
+        "title": "اختصار لصق آخر نص مفرّغ",
+        "description": "يلصق آخر إملاء عند المؤشر مرة أخرى إذا لم يصل إلى مربع النص"
+      },
       "translationHotkey": {
         "title": "مفتاح اختصار الترجمة",
         "description": "قم بالإملاء بأي لغة — يخرج النص الملصق مترجمًا"

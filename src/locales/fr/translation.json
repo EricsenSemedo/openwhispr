@@ -2485,6 +2485,10 @@
         "versionPlaceholder": "—",
         "whatsNew": "Nouveautés de la v{{version}}"
       },
+      "pasteLastHotkey": {
+        "title": "Raccourci pour coller la dernière transcription",
+        "description": "Recolle votre dernière dictée au curseur si elle a manqué la zone de texte"
+      },
       "translationHotkey": {
         "title": "Raccourci de Traduction",
         "description": "Dictez dans n'importe quelle langue : le texte collé ressort traduit"

@@ -15,6 +15,7 @@ are not in this repo.
 | Hold or double-tap shortcut | Opt-in (`dualShortcut` in `local-dictation-options.json`). |
 | Local speech runtime | Starts and stops the local ASR supervisor with the app. |
 | Wispr Flow-style paste | Cursor-aware casing, private clipboard, reviewed auto-learn. Each call falls back to stock behaviour. |
+| Paste last transcript | Optional hotkey (`PASTE_LAST_KEY`, Settings > Hotkeys on Windows) that pastes the newest finished dictation into the window focused now. |
 | Stock updater off | `resources/local-build.json` stops the upstream updater from replacing this build. |
 
 Every feature talks to the local adapter on `127.0.0.1:18765` and falls back

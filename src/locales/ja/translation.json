@@ -2190,6 +2190,10 @@
         "versionPlaceholder": "—",
         "whatsNew": "v{{version}} の新機能"
       },
+      "pasteLastHotkey": {
+        "title": "最後の文字起こしを貼り付けるホットキー",
+        "description": "音声入力がテキストボックスに入らなかったときに、最新の内容をカーソル位置へ貼り付け直します"
+      },
       "translationHotkey": {
         "title": "翻訳ホットキー",
         "description": "どの言語で話しても、貼り付けられるテキストは翻訳済みになります"

@@ -2190,6 +2190,10 @@
         "versionPlaceholder": "—",
         "whatsNew": "v{{version}} 的新功能"
       },
+      "pasteLastHotkey": {
+        "title": "貼上上次轉錄的快速鍵",
+        "description": "如果聽寫內容沒有進入文字方塊，可在游標處重新貼上最近一次聽寫"
+      },
       "translationHotkey": {
         "title": "翻譯快捷鍵",
         "description": "用任何語言聽寫——貼上的文字會自動翻譯"

@@ -111,6 +111,33 @@ test("adopts a legacy chat-agent hotkey as the voice-agent hotkey", async (t) =>
   assert.doesNotMatch(persistedEnv, /^CHAT_AGENT_KEY=/m);
 });
 
+test("the paste-last hotkey survives a rewrite of the .env file", async (t) => {
+  const userDataDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "openwhispr-paste-last-hotkey-"));
+  const hadKey = Object.hasOwn(process.env, "PASTE_LAST_KEY");
+  const previousKey = process.env.PASTE_LAST_KEY;
+  const originalResourcesPath = process.resourcesPath;
+  process.resourcesPath = userDataDirectory;
+  delete process.env.PASTE_LAST_KEY;
+
+  t.after(() => {
+    if (hadKey) process.env.PASTE_LAST_KEY = previousKey;
+    else delete process.env.PASTE_LAST_KEY;
+    process.resourcesPath = originalResourcesPath;
+    fs.rmSync(userDataDirectory, { recursive: true, force: true });
+  });
+
+  installDotenvStub(t);
+  const EnvironmentManager = loadEnvironmentManager(t, userDataDirectory);
+  const environmentManager = new EnvironmentManager();
+
+  environmentManager.savePasteLastKey("Control+Alt+Shift+V");
+  await environmentManager.saveAllKeysToEnvFile();
+
+  assert.equal(environmentManager.getPasteLastKey(), "Control+Alt+Shift+V");
+  const persistedEnv = fs.readFileSync(path.join(userDataDirectory, ".env"), "utf8");
+  assert.match(persistedEnv, /^PASTE_LAST_KEY=Control\+Alt\+Shift\+V$/m);
+});
+
 test("device cleanup clears persisted settings and encrypted secret files", async (t) => {
   const userDataDirectory = fs.mkdtempSync(
     path.join(os.tmpdir(), "openwhispr-device-settings-cleanup-")
