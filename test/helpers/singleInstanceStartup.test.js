@@ -37,6 +37,7 @@ function runStartup({ lockAvailable, hidden }) {
       shouldForceXWayland: () => false,
     },
     "./src/helpers/hotkeyRepeatGate": { createHotkeyRepeatGate() {} },
+    "./src/helpers/pasteLastTranscript": { pasteLastTranscript: async () => {} },
     "./src/helpers/linuxGpuCompositing": { shouldDisableGpuCompositing: () => false },
     "./src/helpers/linuxUrlSchemeHandler": {
       registerLinuxUrlSchemeHandler: () => ({ registered: true }),

@@ -1183,6 +1183,7 @@ for (const mode of ["normal", "update", "held delete"]) {
       "meetingAecManager",
       "textEditMonitor",
       "managedDevicePolicy",
+      "localAsrRuntime",
     ])
       context[name] = null;
     target._cleanupTextEditMonitor = () => {};

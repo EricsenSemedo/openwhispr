@@ -12,6 +12,8 @@ const {
 // request, the New chat menu) is what's under test; everything it renders around that is a stub.
 const NULL_COMPONENT = "export default () => null;";
 const MOCKS = {
+  // Local fork: the Local Dictation home screen mounts outside React.
+  "./localDashboard/localDashboard": "export function mountLocalDashboard() {}",
   "./notes/PersonalNotesView": `
     export default function PersonalNotesView(props) {
       globalThis.__notesProps = props;
