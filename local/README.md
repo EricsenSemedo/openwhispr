@@ -64,6 +64,10 @@ local commit in its own PR.
   ref in a CRLF worktree under `local/.build/` (ignored).
 - The licensed Yowza fonts are copied from the official app into that
   worktree only. They are never committed (Blaze Type EULA).
+- Since v1.12.0 upstream patches some dependencies (`patches/`). `build.py`
+  runs `npm run apply:patches` after `npm ci --ignore-scripts`, as the
+  release workflow does, and leaves out the file types electron-builder
+  always skips (such as `*.d.ts`).
 - Native helpers, models and `node_modules` come from the official release,
   so no native toolchain is needed. A commit that changes native code or
   dependencies needs the full upstream build instead.
