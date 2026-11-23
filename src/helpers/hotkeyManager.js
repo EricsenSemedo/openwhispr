@@ -125,6 +125,9 @@ class HotkeyManager extends EventEmitter {
     this.useHyprland = false;
     this.hyprlandInitializationAttempted = false;
     this.hyprlandRegistrationReady = Promise.resolve();
+    // Completion of dictation startup, including any backend/globalShortcut fallback.
+    // Consumers must not use this to delay the windows or the saved-Hold check.
+    this.registrationReady = Promise.resolve();
     this.kdeManager = null;
     this.useKDE = false;
     // While the GNOME or Hyprland registration waits to read the saved hotkey, the
@@ -1112,6 +1115,7 @@ class HotkeyManager extends EventEmitter {
 
     this.mainWindow = mainWindow;
     this.hotkeyCallback = callback;
+    this.registrationReady = Promise.resolve();
 
     // Try GNOME native shortcuts on any GNOME session (X11 or Wayland).
     // On Wayland: required (globalShortcut/XGrabKey doesn't work globally).
@@ -1135,7 +1139,7 @@ class HotkeyManager extends EventEmitter {
               );
               if (!ok) {
                 this.useGnome = false;
-                this.loadSavedHotkeyOrDefault(mainWindow, callback);
+                return this.loadSavedHotkeyOrDefault(mainWindow, callback);
               }
             }
           } catch (err) {
@@ -1144,12 +1148,14 @@ class HotkeyManager extends EventEmitter {
               err.message
             );
             this.useGnome = false;
-            this.loadSavedHotkeyOrDefault(mainWindow, callback);
+            return this.loadSavedHotkeyOrDefault(mainWindow, callback);
           }
         };
 
         this.nativeRegistrationPending = true;
-        setTimeout(registerGnomeHotkey, HOTKEY_REGISTRATION_DELAY_MS);
+        this.registrationReady = new Promise((resolve) =>
+          setTimeout(resolve, HOTKEY_REGISTRATION_DELAY_MS)
+        ).then(registerGnomeHotkey);
         this.isInitialized = true;
         return;
       }
@@ -1185,7 +1191,7 @@ class HotkeyManager extends EventEmitter {
               );
               if (!ok) {
                 this.useHyprland = false;
-                this.loadSavedHotkeyOrDefault(mainWindow, callback);
+                return this.loadSavedHotkeyOrDefault(mainWindow, callback);
               }
             }
           } catch (err) {
@@ -1194,14 +1200,15 @@ class HotkeyManager extends EventEmitter {
               err.message
             );
             this.useHyprland = false;
-            this.loadSavedHotkeyOrDefault(mainWindow, callback);
+            return this.loadSavedHotkeyOrDefault(mainWindow, callback);
           }
         };
 
         this.nativeRegistrationPending = true;
-        this.hyprlandRegistrationReady = new Promise((resolve) =>
+        this.registrationReady = new Promise((resolve) =>
           setTimeout(resolve, HOTKEY_REGISTRATION_DELAY_MS)
         ).then(registerHyprlandHotkey);
+        this.hyprlandRegistrationReady = this.registrationReady;
         this.isInitialized = true;
         return;
       }
@@ -1245,7 +1252,7 @@ class HotkeyManager extends EventEmitter {
               this.kdeManager.close();
               this.kdeManager = null;
               this.useKDE = false;
-              this.loadSavedHotkeyOrDefault(mainWindow, callback);
+              return this.loadSavedHotkeyOrDefault(mainWindow, callback);
             }
           } catch (err) {
             debugLogger.log(
@@ -1255,11 +1262,13 @@ class HotkeyManager extends EventEmitter {
             this.kdeManager?.close();
             this.kdeManager = null;
             this.useKDE = false;
-            this.loadSavedHotkeyOrDefault(mainWindow, callback);
+            return this.loadSavedHotkeyOrDefault(mainWindow, callback);
           }
         };
 
-        setTimeout(registerKDEHotkey, HOTKEY_REGISTRATION_DELAY_MS);
+        this.registrationReady = new Promise((resolve) =>
+          setTimeout(resolve, HOTKEY_REGISTRATION_DELAY_MS)
+        ).then(registerKDEHotkey);
         this.isInitialized = true;
         return;
       }
@@ -1278,15 +1287,17 @@ class HotkeyManager extends EventEmitter {
         debugLogger.log(`[HotkeyManager] Hotkey "${envHotkey}" registered from env`);
       } else {
         debugLogger.log(`[HotkeyManager] Env hotkey "${envHotkey}" failed, waiting for page`);
-        this.loadSavedHotkeyOrDefault(mainWindow, callback);
+        this.registrationReady = this.loadSavedHotkeyOrDefault(mainWindow, callback);
       }
     } else {
-      const loadHotkey = () => this.loadSavedHotkeyOrDefault(mainWindow, callback);
-      if (mainWindow.webContents.isLoading()) {
-        mainWindow.webContents.once("did-finish-load", loadHotkey);
-      } else {
-        loadHotkey();
-      }
+      this.registrationReady = new Promise((resolve) => {
+        const loadHotkey = () => resolve(this.loadSavedHotkeyOrDefault(mainWindow, callback));
+        if (mainWindow.webContents.isLoading()) {
+          mainWindow.webContents.once("did-finish-load", loadHotkey);
+        } else {
+          loadHotkey();
+        }
+      });
     }
 
     this.isInitialized = true;

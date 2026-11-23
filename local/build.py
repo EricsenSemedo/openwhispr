@@ -38,6 +38,8 @@ RELEASE_ENV = {
     "VITE_OPENWHISPR_OAUTH_CALLBACK_URL": "https://openwhispr.com/auth/desktop-callback",
 }
 BLOCK = 4 * 1024 * 1024
+DEFAULT_EXCLUDED_EXTS = ("iml hprof orig pyc pyo rbc swp csproj sln suo xproj cc d.ts "
+                         "mk a o obj forge-meta pdb").split()
 
 
 # --- asar -----------------------------------------------------------------
@@ -130,6 +132,11 @@ def copy_fonts(official, tree):
 def build_renderer(tree):
     if not os.path.isdir(os.path.join(tree, "node_modules")):
         run([tool("npm"), "ci", "--ignore-scripts", "--no-audit", "--no-fund", "--engine-strict=false"], tree)
+    # Since v1.12.0 upstream patches dependencies (patches/, patch-package) and
+    # the release workflow applies them after `npm ci --ignore-scripts`.
+    with open(os.path.join(tree, "package.json"), encoding="utf-8") as f:
+        if "apply:patches" in json.load(f).get("scripts", {}):
+            run([tool("npm"), "run", "apply:patches"], tree)
     env = dict(os.environ, **RELEASE_ENV)
     shutil.rmtree(os.path.join(tree, "src", "dist"), ignore_errors=True)
     run([os.path.join(tree, "node_modules", ".bin", "vite.cmd" if os.name == "nt" else "vite"), "build"],
@@ -155,6 +162,8 @@ def packaged_sources(tree):
                 rel = os.path.relpath(os.path.join(r, name), tree).replace(os.sep, "/")
                 if fnmatch.fnmatch(rel, pattern.replace("**/", "*")):
                     found.add(rel)
+    # electron-builder always leaves out these file types (app-builder-lib fileMatcher.js excludedExts).
+    exclude += ["**/*." + ext for ext in DEFAULT_EXCLUDED_EXTS]
     return {p for p in found if not any(fnmatch.fnmatch(p, x.replace("**/", "*")) for x in exclude)}
 
 
